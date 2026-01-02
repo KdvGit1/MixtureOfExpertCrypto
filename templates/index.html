@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto MoE Scanner</title>
+    <meta name="description" content="AI-powered Binance Futures scanner using Mixture of Experts models">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-icon">🧠</div>
+                <div class="logo-text">
+                    <h1>Crypto MoE Scanner</h1>
+                    <span class="tagline">AI-Powered Market Analysis</span>
+                </div>
+            </div>
+            <div class="status-badge" id="statusBadge">
+                <span class="status-dot"></span>
+                <span class="status-text">Ready</span>
+            </div>
+        </header>
+
+        <!-- Controls -->
+        <section class="controls-section">
+            <div class="control-card">
+                <h2>Scan Configuration</h2>
+                <div class="control-row">
+                    <div class="control-group">
+                        <label for="timeframeSelect">Timeframe</label>
+                        <select id="timeframeSelect" class="select-input">
+                            <option value="15m">15 Minutes</option>
+                            <option value="1h" selected>1 Hour</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <button id="scanBtn" class="btn btn-primary">
+                            <span class="btn-icon">▶</span>
+                            Start Scan
+                        </button>
+                        <button id="stopBtn" class="btn btn-danger" disabled>
+                            <span class="btn-icon">⬛</span>
+                            Stop
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Progress -->
+        <section class="progress-section" id="progressSection" style="display: none;">
+            <div class="progress-card">
+                <div class="progress-header">
+                    <span id="progressPair">Scanning...</span>
+                    <span id="progressCount">0 / 0</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+                </div>
+                <div class="progress-footer">
+                    <span id="progressPercent">0%</span>
+                    <span id="progressResults">0 results</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Stats Cards -->
+        <section class="stats-section">
+            <div class="stat-card bullish">
+                <div class="stat-icon">📈</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="bullishCount">0</span>
+                    <span class="stat-label">Bullish Signals</span>
+                </div>
+            </div>
+            <div class="stat-card bearish">
+                <div class="stat-icon">📉</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="bearishCount">0</span>
+                    <span class="stat-label">Bearish Signals</span>
+                </div>
+            </div>
+            <div class="stat-card neutral">
+                <div class="stat-icon">📊</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="totalScanned">0</span>
+                    <span class="stat-label">Total Scanned</span>
+                </div>
+            </div>
+            <div class="stat-card error">
+                <div class="stat-icon">⚠️</div>
+                <div class="stat-content">
+                    <span class="stat-value" id="errorCount">0</span>
+                    <span class="stat-label">Errors</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Results Table -->
+        <section class="results-section">
+            <div class="results-card">
+                <div class="results-header">
+                    <h2>Scan Results</h2>
+                    <div class="filter-group">
+                        <input type="text" id="searchInput" class="search-input" placeholder="Search pairs...">
+                        <select id="filterSelect" class="select-input small">
+                            <option value="all">All Signals</option>
+                            <option value="bullish">Bullish Only</option>
+                            <option value="bearish">Bearish Only</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="results-table" id="resultsTable">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-sort="pair">Pair</th>
+                                <th class="sortable" data-sort="prediction">AI Prediction</th>
+                                <th class="sortable" data-sort="price">Price</th>
+                                <th class="sortable" data-sort="rsi">RSI</th>
+                                <th class="sortable" data-sort="volume">Volume</th>
+                                <th>Signal</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody">
+                            <tr class="empty-row">
+                                <td colspan="6">
+                                    <div class="empty-state">
+                                        <span class="empty-icon">🔍</span>
+                                        <p>No results yet. Start a scan to analyze the market.</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Powered by Mixture of Experts AI • Binance Futures Data</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
