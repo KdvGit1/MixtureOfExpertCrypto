@@ -200,11 +200,30 @@ async def scan_single_pair(pair: str, timeframe: str, model: MultiBranchModel) -
         if x_cnn is None:
             return {"error": "Insufficient data for model input"}
         
-        # Get prediction
+        # Get prediction from all branches
         with torch.no_grad():
-            pred_main, _, _, _ = model(x_cnn, x_lstm, x_tr)
+            pred_main, pred_cnn, pred_lstm, pred_tr = model(x_cnn, x_lstm, x_tr)
+            
             # Reverse training scaling: model was trained with log_return * 100
             prediction = pred_main.item() / 100.0
+            aux_cnn = pred_cnn.item() / 100.0
+            aux_lstm = pred_lstm.item() / 100.0
+            aux_tr = pred_tr.item() / 100.0
+            
+            # Calculate confidence based on branch agreement
+            # If all branches agree on direction (all positive or all negative), high confidence
+            # If branches disagree, lower confidence
+            branches = [aux_cnn, aux_lstm, aux_tr]
+            signs = [1 if b > 0 else -1 for b in branches]
+            direction_agreement = abs(sum(signs)) / 3.0  # 1.0 = all agree, 0.33 = split
+            
+            # Also factor in strength consistency (std dev of predictions)
+            branch_std = np.std(branches)
+            strength_consistency = max(0, 1 - branch_std * 10)  # Penalize high variance
+            
+            # Combined confidence: 60% direction agreement, 40% strength consistency
+            confidence = (direction_agreement * 0.6 + strength_consistency * 0.4) * 100
+            confidence = round(min(100, max(0, confidence)), 1)  # Clamp to 0-100%
         
         # Get last candle info
         last_candle = df_display.iloc[-1]
@@ -212,6 +231,7 @@ async def scan_single_pair(pair: str, timeframe: str, model: MultiBranchModel) -
         return {
             "prediction": round(prediction * 100, 4),  # Display as percentage (e.g., 0.5%)
             "prediction_raw": prediction,  # Actual log return value
+            "confidence": confidence,  # AI confidence score (0-100%)
             "price": float(last_candle['Close']),
             "rsi": float(last_candle['RSI']) if 'RSI' in last_candle else None,
             "volume": float(last_candle['Volume']),

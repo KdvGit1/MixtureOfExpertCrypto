@@ -78,7 +78,7 @@ const api = {
 function updateStatus(text, isScanning = false) {
     const statusText = elements.statusBadge.querySelector('.status-text');
     statusText.textContent = text;
-    
+
     if (isScanning) {
         elements.statusBadge.classList.add('scanning');
     } else {
@@ -98,7 +98,7 @@ function updateStats(results) {
     const values = Object.values(results);
     const bullish = values.filter(r => r.prediction > 0).length;
     const bearish = values.filter(r => r.prediction < 0).length;
-    
+
     elements.bullishCount.textContent = bullish;
     elements.bearishCount.textContent = bearish;
     elements.totalScanned.textContent = values.length;
@@ -117,6 +117,13 @@ function formatVolume(volume) {
     if (volume >= 1e6) return (volume / 1e6).toFixed(2) + 'M';
     if (volume >= 1e3) return (volume / 1e3).toFixed(2) + 'K';
     return volume.toFixed(0);
+}
+
+function formatTime(timeStr) {
+    if (!timeStr) return '-';
+    // Format: "2026-01-03 01:14:58" -> "01:14:58"
+    const parts = timeStr.split(' ');
+    return parts.length > 1 ? parts[1] : timeStr;
 }
 
 function getSignalClass(prediction) {
@@ -139,28 +146,34 @@ function getRsiClass(rsi) {
     return '';
 }
 
+function getConfidenceClass(confidence) {
+    if (confidence >= 80) return 'high-confidence';
+    if (confidence >= 50) return 'medium-confidence';
+    return 'low-confidence';
+}
+
 function renderResults(results) {
     // Apply filters
     let filtered = Object.entries(results);
-    
+
     // Search filter
     if (state.searchQuery) {
         const query = state.searchQuery.toLowerCase();
         filtered = filtered.filter(([pair]) => pair.toLowerCase().includes(query));
     }
-    
+
     // Signal filter
     if (state.filter === 'bullish') {
         filtered = filtered.filter(([, data]) => data.prediction > 0);
     } else if (state.filter === 'bearish') {
         filtered = filtered.filter(([, data]) => data.prediction < 0);
     }
-    
+
     // Sort
     filtered.sort((a, b) => {
         const [, dataA] = a;
         const [, dataB] = b;
-        
+
         let valA, valB;
         switch (state.sortColumn) {
             case 'pair':
@@ -183,25 +196,33 @@ function renderResults(results) {
                 valA = dataA.volume || 0;
                 valB = dataB.volume || 0;
                 break;
+            case 'time':
+                valA = dataA.updated_at || '';
+                valB = dataB.updated_at || '';
+                break;
+            case 'confidence':
+                valA = dataA.confidence || 0;
+                valB = dataB.confidence || 0;
+                break;
             default:
-                valA = dataA.prediction || 0;
-                valB = dataB.prediction || 0;
+                valA = Math.abs(dataA.prediction || 0);
+                valB = Math.abs(dataB.prediction || 0);
         }
-        
+
         if (typeof valA === 'string') {
-            return state.sortDirection === 'asc' 
-                ? valA.localeCompare(valB) 
+            return state.sortDirection === 'asc'
+                ? valA.localeCompare(valB)
                 : valB.localeCompare(valA);
         }
-        
+
         return state.sortDirection === 'asc' ? valA - valB : valB - valA;
     });
-    
+
     // Render
     if (filtered.length === 0) {
         elements.resultsBody.innerHTML = `
             <tr class="empty-row">
-                <td colspan="6">
+                <td colspan="8">
                     <div class="empty-state">
                         <span class="empty-icon">🔍</span>
                         <p>No results match your filters.</p>
@@ -211,27 +232,29 @@ function renderResults(results) {
         `;
         return;
     }
-    
+
     const rows = filtered.map(([pair, data], index) => {
         const signalClass = getSignalClass(data.prediction);
         const predictionClass = data.prediction > 0 ? 'positive' : data.prediction < 0 ? 'negative' : '';
         const rsiClass = getRsiClass(data.rsi);
-        
+
         // Clean pair name for display
         const displayPair = pair.replace(':USDT', '');
-        
+
         return `
             <tr style="animation-delay: ${index * 0.02}s">
                 <td class="pair-cell">${displayPair}</td>
                 <td class="prediction-cell ${predictionClass}">${data.prediction.toFixed(4)}%</td>
+                <td class="confidence-cell ${getConfidenceClass(data.confidence)}">${data.confidence ? data.confidence.toFixed(1) + '%' : '-'}</td>
                 <td class="price-cell">$${formatPrice(data.price)}</td>
                 <td class="rsi-cell ${rsiClass}">${data.rsi ? data.rsi.toFixed(1) : '-'}</td>
                 <td class="volume-cell">${formatVolume(data.volume)}</td>
                 <td><span class="signal-badge ${signalClass}">${getSignalText(data.prediction)}</span></td>
+                <td class="time-cell">${formatTime(data.updated_at)}</td>
             </tr>
         `;
     }).join('');
-    
+
     elements.resultsBody.innerHTML = rows;
 }
 
@@ -240,22 +263,22 @@ function renderResults(results) {
 // ============================================
 async function startScan() {
     const timeframe = elements.timeframeSelect.value;
-    
+
     try {
         await api.startScan(timeframe);
-        
+
         state.isScanning = true;
         state.results = {};
-        
+
         // Update UI
         elements.scanBtn.disabled = true;
         elements.stopBtn.disabled = false;
         elements.progressSection.style.display = 'block';
         updateStatus('Scanning...', true);
-        
+
         // Start polling
         startPolling();
-        
+
     } catch (error) {
         alert('Failed to start scan: ' + error.message);
     }
@@ -266,12 +289,12 @@ async function stopScan() {
         await api.stopScan();
         state.isScanning = false;
         stopPolling();
-        
+
         // Update UI
         elements.scanBtn.disabled = false;
         elements.stopBtn.disabled = true;
         updateStatus('Stopped', false);
-        
+
     } catch (error) {
         console.error('Failed to stop scan:', error);
     }
@@ -283,29 +306,29 @@ async function pollStatus() {
             api.getStatus(),
             api.getResults()
         ]);
-        
+
         // Update progress
         updateProgress(status);
         elements.errorCount.textContent = status.errors_count;
-        
+
         // Update results
         state.results = resultsData.results;
         updateStats(state.results);
         renderResults(state.results);
-        
+
         // Check if scan complete
         if (!status.is_scanning && state.isScanning) {
             state.isScanning = false;
             stopPolling();
-            
+
             elements.scanBtn.disabled = false;
             elements.stopBtn.disabled = true;
             updateStatus('Complete', false);
-            
+
             // Keep progress visible but update text
             elements.progressPair.textContent = 'Scan Complete!';
         }
-        
+
     } catch (error) {
         console.error('Polling error:', error);
     }
@@ -334,7 +357,7 @@ function handleSort(column) {
         state.sortColumn = column;
         state.sortDirection = 'desc';
     }
-    
+
     // Update header styles
     document.querySelectorAll('.results-table th.sortable').forEach(th => {
         th.classList.remove('sorted', 'asc');
@@ -345,7 +368,7 @@ function handleSort(column) {
             }
         }
     });
-    
+
     renderResults(state.results);
 }
 
@@ -356,19 +379,19 @@ function initEventListeners() {
     // Scan controls
     elements.scanBtn.addEventListener('click', startScan);
     elements.stopBtn.addEventListener('click', stopScan);
-    
+
     // Search
     elements.searchInput.addEventListener('input', (e) => {
         state.searchQuery = e.target.value;
         renderResults(state.results);
     });
-    
+
     // Filter
     elements.filterSelect.addEventListener('change', (e) => {
         state.filter = e.target.value;
         renderResults(state.results);
     });
-    
+
     // Sorting
     document.querySelectorAll('.results-table th.sortable').forEach(th => {
         th.addEventListener('click', () => handleSort(th.dataset.sort));
@@ -380,12 +403,12 @@ function initEventListeners() {
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
     initEventListeners();
-    
+
     // Set initial sort indicator
     const predictionHeader = document.querySelector('[data-sort="prediction"]');
     if (predictionHeader) {
         predictionHeader.classList.add('sorted');
     }
-    
+
     console.log('🧠 Crypto MoE Scanner initialized');
 });

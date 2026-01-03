@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,6 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
     <div class="app-container">
         <!-- Header -->
@@ -122,15 +124,17 @@
                             <tr>
                                 <th class="sortable" data-sort="pair">Pair</th>
                                 <th class="sortable" data-sort="prediction">AI Prediction</th>
+                                <th class="sortable" data-sort="confidence">Confidence</th>
                                 <th class="sortable" data-sort="price">Price</th>
                                 <th class="sortable" data-sort="rsi">RSI</th>
                                 <th class="sortable" data-sort="volume">Volume</th>
                                 <th>Signal</th>
+                                <th class="sortable" data-sort="time">Time</th>
                             </tr>
                         </thead>
                         <tbody id="resultsBody">
                             <tr class="empty-row">
-                                <td colspan="6">
+                                <td colspan="8">
                                     <div class="empty-state">
                                         <span class="empty-icon">🔍</span>
                                         <p>No results yet. Start a scan to analyze the market.</p>
@@ -151,4 +155,5 @@
 
     <script src="/static/app.js"></script>
 </body>
+
 </html>
