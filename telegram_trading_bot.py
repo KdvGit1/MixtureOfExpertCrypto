@@ -361,6 +361,12 @@ Komutlar: /help
 /futures - Futures trading moduna geç (5x)
 /futures 10 - Futures moduna 10x leverage ile geç
 
+<b>Coin Yönetimi:</b>
+/coins - Aktif coinleri göster
+/coins add BTC ETH - Coin ekle
+/coins remove DOGE - Coin kaldır
+/coins all - Tüm 20 coini aktif et
+
 <b>Özellikler:</b>
 • 40 AI model (20 coin × 2 timeframe)
 • SPOT ve FUTURES desteği
@@ -416,6 +422,86 @@ Komutlar: /help
         await update.message.reply_text(f"🟡 <b>FUTURES {leverage}x</b> moduna geçildi!", parse_mode='HTML')
         await self.send_notification(f"🟡 Trading modu: <b>FUTURES {leverage}x</b>")
         self.logger.info(f"🟡 Switched to FUTURES {leverage}x mode")
+    
+    async def cmd_coins(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Manage trading coins: /coins, /coins add BTC, /coins remove ETH"""
+        args = context.args
+        
+        # No args - show current coins
+        if not args:
+            current = ', '.join(self.config.coins_to_trade)
+            available = ', '.join([c for c in SUPPORTED_COINS if c not in self.config.coins_to_trade])
+            msg = f"""
+💰 <b>Coin Ayarları</b>
+
+<b>Aktif Coinler:</b>
+{current}
+
+<b>Eklenebilir:</b>
+{available}
+
+<b>Kullanım:</b>
+/coins add BTC ETH SOL
+/coins remove DOGE
+/coins set BTC,ETH,SOL
+/coins all
+"""
+            await update.message.reply_text(msg.strip(), parse_mode='HTML')
+            return
+        
+        action = args[0].lower()
+        
+        # Add coins
+        if action == 'add' and len(args) > 1:
+            added = []
+            for coin in args[1:]:
+                coin = coin.upper().replace(',', '')
+                if coin in SUPPORTED_COINS and coin not in self.config.coins_to_trade:
+                    self.config.coins_to_trade.append(coin)
+                    added.append(coin)
+            if added:
+                await update.message.reply_text(f"✅ Eklendi: {', '.join(added)}")
+            else:
+                await update.message.reply_text("⚠️ Eklenecek geçerli coin bulunamadı.")
+            return
+        
+        # Remove coins
+        if action == 'remove' and len(args) > 1:
+            removed = []
+            for coin in args[1:]:
+                coin = coin.upper().replace(',', '')
+                if coin in self.config.coins_to_trade:
+                    # Check if position is open
+                    if self.positions.get(coin) and self.positions[coin].side != "FLAT":
+                        await update.message.reply_text(f"⚠️ {coin} açık pozisyonu var, önce kapatın.")
+                        continue
+                    self.config.coins_to_trade.remove(coin)
+                    removed.append(coin)
+            if removed:
+                await update.message.reply_text(f"✅ Kaldırıldı: {', '.join(removed)}")
+            else:
+                await update.message.reply_text("⚠️ Kaldırılacak coin bulunamadı.")
+            return
+        
+        # Set specific coins
+        if action == 'set' and len(args) > 1:
+            coins_str = ' '.join(args[1:])
+            new_coins = [c.strip().upper() for c in coins_str.replace(',', ' ').split()]
+            new_coins = [c for c in new_coins if c in SUPPORTED_COINS]
+            if new_coins:
+                self.config.coins_to_trade = new_coins
+                await update.message.reply_text(f"✅ Coinler ayarlandı: {', '.join(new_coins)}")
+            else:
+                await update.message.reply_text("⚠️ Geçerli coin bulunamadı.")
+            return
+        
+        # All coins
+        if action == 'all':
+            self.config.coins_to_trade = SUPPORTED_COINS.copy()
+            await update.message.reply_text(f"✅ Tüm {len(SUPPORTED_COINS)} coin aktif.")
+            return
+        
+        await update.message.reply_text("❌ Geçersiz komut. /coins yazarak kullanımı görün.")
     
     # ========== NOTIFICATIONS ==========
     
@@ -868,8 +954,15 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         if not self.initialize_exchange():
             return
         
-        # Build Telegram app
-        self.telegram_app = Application.builder().token(self.config.telegram_bot_token).build()
+        # Build Telegram app with longer timeout for Raspberry Pi
+        from telegram.request import HTTPXRequest
+        request = HTTPXRequest(
+            connect_timeout=30.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=30.0
+        )
+        self.telegram_app = Application.builder().token(self.config.telegram_bot_token).request(request).build()
         
         # Add handlers
         self.telegram_app.add_handler(CommandHandler("start", self.cmd_start))
@@ -878,6 +971,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         self.telegram_app.add_handler(CommandHandler("help", self.cmd_help))
         self.telegram_app.add_handler(CommandHandler("spot", self.cmd_spot))
         self.telegram_app.add_handler(CommandHandler("futures", self.cmd_futures))
+        self.telegram_app.add_handler(CommandHandler("coins", self.cmd_coins))
         
         # Start Telegram
         await self.telegram_app.initialize()
