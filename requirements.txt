@@ -19,3 +19,9 @@ TA-Lib>=0.4.28
 
 # Deep Learning
 torch>=2.0.0
+
+# Telegram Bot
+python-telegram-bot>=20.0
+
+# Templates
+jinja2>=3.0.0
