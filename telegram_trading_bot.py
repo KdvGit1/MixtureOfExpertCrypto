@@ -29,9 +29,10 @@ import time
 import json
 import asyncio
 import logging
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_DOWN
 from collections import OrderedDict
@@ -72,9 +73,13 @@ DEVICE = torch.device("cpu")
 @dataclass
 class BotConfig:
     """Bot configuration settings."""
-    # API Settings
+    # API Settings (Testnet)
     api_key: str = ""
     api_secret: str = ""
+    
+    # API Settings (Real/Mainnet) - for switching between demo/real
+    real_api_key: str = ""
+    real_api_secret: str = ""
     
     # Telegram
     telegram_bot_token: str = ""
@@ -111,6 +116,11 @@ class BotConfig:
     
     # Raspberry Pi optimization
     max_loaded_models: int = 5  # LRU cache size
+    
+    # Safety Limits (for real trading)
+    daily_loss_limit_pct: float = -5.0  # Stop trading if daily loss exceeds -5%
+    max_daily_trades: int = 20  # Maximum trades per day
+    min_balance_usdt: float = 50.0  # Minimum balance to keep (don't trade below this)
 
 
 # ============================================
@@ -235,6 +245,7 @@ class Position:
     amount: float = 0.0
     entry_time: Optional[datetime] = None
     entry_prediction: float = 0.0
+    trade_id: Optional[str] = None  # Unique ID for tracking
     
     def pnl_pct(self, current_price: float) -> float:
         """Calculate P&L percentage."""
@@ -244,6 +255,104 @@ class Position:
             # SHORT profits when price goes down
             return ((self.entry_price - current_price) / self.entry_price) * 100
         return ((current_price - self.entry_price) / self.entry_price) * 100
+
+
+@dataclass
+class TradeRecord:
+    """Stores a completed trade for history."""
+    trade_id: str
+    coin: str
+    side: str  # "BUY" or "SELL"
+    entry_price: float
+    exit_price: float
+    amount: float
+    entry_time: str
+    exit_time: str
+    pnl_pct: float
+    pnl_usdt: float
+    reason: str
+    ai_prediction: float
+    ai_confidence: float
+    trading_mode: str  # "spot" or "futures"
+    leverage: int = 1
+    is_dry_run: bool = True
+
+
+class TradeHistory:
+    """Manages trade history with JSON persistence."""
+    
+    def __init__(self, history_file: Path):
+        self.history_file = history_file
+        self.trades: List[TradeRecord] = []
+        self.load()
+    
+    def load(self):
+        """Load trades from JSON file."""
+        if self.history_file.exists():
+            try:
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.trades = [TradeRecord(**trade) for trade in data]
+                logging.info(f"📜 Loaded {len(self.trades)} trades from history")
+            except Exception as e:
+                logging.error(f"Failed to load trade history: {e}")
+                self.trades = []
+        else:
+            self.trades = []
+    
+    def save(self):
+        """Save trades to JSON file."""
+        try:
+            self.history_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump([asdict(trade) for trade in self.trades], f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.error(f"Failed to save trade history: {e}")
+    
+    def add_trade(self, trade: TradeRecord):
+        """Add a new trade to history."""
+        self.trades.append(trade)
+        self.save()
+        logging.info(f"📝 Trade saved: {trade.coin} {trade.side} ({trade.pnl_pct:+.2f}%)")
+    
+    def get_stats(self) -> Dict:
+        """Calculate overall statistics."""
+        if not self.trades:
+            return {'total': 0, 'wins': 0, 'losses': 0, 'win_rate': 0, 'total_pnl_pct': 0, 'total_pnl_usdt': 0}
+        
+        wins = sum(1 for t in self.trades if t.pnl_pct > 0)
+        losses = sum(1 for t in self.trades if t.pnl_pct < 0)
+        total_pnl_pct = sum(t.pnl_pct for t in self.trades)
+        total_pnl_usdt = sum(t.pnl_usdt for t in self.trades)
+        
+        return {
+            'total': len(self.trades),
+            'wins': wins,
+            'losses': losses,
+            'win_rate': (wins / len(self.trades)) * 100 if self.trades else 0,
+            'total_pnl_pct': total_pnl_pct,
+            'total_pnl_usdt': total_pnl_usdt
+        }
+    
+    def get_recent(self, n: int = 10) -> List[TradeRecord]:
+        """Get last N trades."""
+        return self.trades[-n:] if len(self.trades) >= n else self.trades
+    
+    def export_csv(self, csv_path: Path):
+        """Export trades to CSV."""
+        try:
+            import csv
+            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                if self.trades:
+                    writer = csv.DictWriter(f, fieldnames=asdict(self.trades[0]).keys())
+                    writer.writeheader()
+                    for trade in self.trades:
+                        writer.writerow(asdict(trade))
+            logging.info(f"📊 Exported {len(self.trades)} trades to {csv_path}")
+            return True
+        except Exception as e:
+            logging.error(f"Failed to export CSV: {e}")
+            return False
 
 
 # ============================================
@@ -273,9 +382,22 @@ class TelegramAutoTradingBot:
         self.total_trades: int = 0
         self.daily_trades: int = 0
         
+        # Trade history
+        history_file = PROJECT_ROOT / "trade_history" / "trades.json"
+        self.trade_history = TradeHistory(history_file)
+        
         # Control
         self.is_running: bool = False
         self.last_scan_time: Optional[datetime] = None
+        
+        # Pending trades (for tracking entry info until exit)
+        self.pending_trades: Dict[str, Dict] = {}
+        
+        # Daily safety tracking
+        self.daily_pnl_pct: float = 0.0
+        self.safety_paused: bool = False
+        self.safety_alert_sent: bool = False  # Prevent spam
+        self.last_reset_date: Optional[datetime] = None
     
     # ========== TELEGRAM HANDLERS ==========
     
@@ -346,32 +468,62 @@ Komutlar: /help
     
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command."""
-        mode_text = f"Mevcut: {'SPOT' if self.config.trading_mode == 'spot' else 'FUTURES ' + str(self.config.leverage) + 'x'}"
+        mode_text = f"{'SPOT' if self.config.trading_mode == 'spot' else 'FUTURES ' + str(self.config.leverage) + 'x'}"
+        network_text = 'TESTNET' if self.config.testnet else 'MAINNET'
+        dryrun_text = '✓ SİMÜLASYON' if self.config.dry_run else '✗ GERÇEK'
         
         msg = f"""
 🤖 <b>Telegram Auto-Trading Bot</b>
 
-<b>Kontrol:</b>
+📊 <b>Durum:</b> {network_text} | {mode_text} | {dryrun_text}
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>⚡ KONTROL</b>
+━━━━━━━━━━━━━━━━━━━━━━
 /start - Botu başlat
 /stop - Botu duraklat
 /status - Durum ve pozisyonlar
 
-<b>Trade Modu:</b> ({mode_text})
-/spot - Spot trading moduna geç
-/futures - Futures trading moduna geç (5x)
-/futures 10 - Futures moduna 10x leverage ile geç
+━━━━━━━━━━━━━━━━━━━━━━
+<b>🔄 NETWORK MODU</b>
+━━━━━━━━━━━━━━━━━━━━━━
+/demo - Demo moda geç (testnet + simülasyon)
+/real confirm - Gerçek moda geç ⚠️
+/dryrun - Simülasyon AÇ (işlem yapmaz)
+/dryrun off - Simülasyon KAPAT (testnet'te)
 
-<b>Coin Yönetimi:</b>
+━━━━━━━━━━━━━━━━━━━━━━
+<b>📈 TRADİNG MODU</b>
+━━━━━━━━━━━━━━━━━━━━━━
+/spot - Spot trading
+/futures - Futures 5x
+/futures 10 - Futures 10x
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>💰 COİN YÖNETİMİ</b>
+━━━━━━━━━━━━━━━━━━━━━━
 /coins - Aktif coinleri göster
 /coins add BTC ETH - Coin ekle
 /coins remove DOGE - Coin kaldır
 /coins all - Tüm 20 coini aktif et
 
-<b>Özellikler:</b>
+━━━━━━━━━━━━━━━━━━━━━━
+<b>📜 GEÇMİŞ & GÜVENLİK</b>
+━━━━━━━━━━━━━━━━━━━━━━
+/history - Trade istatistikleri
+/history export - CSV'ye aktar
+/safety - Güvenlik durumu
+/safety reset - Güvenlik kilidini sıfırla
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>✨ ÖZELLİKLER</b>
+━━━━━━━━━━━━━━━━━━━━━━
 • 40 AI model (20 coin × 2 timeframe)
-• SPOT ve FUTURES desteği
-• Anlık bildirimler
-• Smart exit stratejisi
+• SPOT & FUTURES desteği
+• Demo/Real mod geçişi
+• Günlük kayıp limiti koruması
+• Trade geçmişi kaydı
+• Anlık Telegram bildirimleri
 """
         await update.message.reply_text(msg.strip(), parse_mode='HTML')
     
@@ -422,6 +574,148 @@ Komutlar: /help
         await update.message.reply_text(f"🟡 <b>FUTURES {leverage}x</b> moduna geçildi!", parse_mode='HTML')
         await self.send_notification(f"🟡 Trading modu: <b>FUTURES {leverage}x</b>")
         self.logger.info(f"🟡 Switched to FUTURES {leverage}x mode")
+    
+    async def cmd_demo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Switch to demo mode (testnet + dry run)."""
+        # Check for open positions
+        open_positions = sum(1 for p in self.positions.values() if p.side != "FLAT")
+        if open_positions > 0:
+            await update.message.reply_text(f"⚠️ Mod değiştirmek için önce {open_positions} açık pozisyonu kapatın.")
+            return
+        
+        # Check if already in demo mode
+        if self.config.testnet and self.config.dry_run:
+            await update.message.reply_text("🎮 Zaten DEMO modundasınız.")
+            return
+        
+        # Switch to demo mode
+        self.config.testnet = True
+        self.config.dry_run = True
+        
+        # Reinitialize exchange with testnet
+        self.initialize_exchange()
+        
+        msg = """
+🎮 <b>DEMO MODU AKTİF</b>
+
+✅ Testnet: Açık
+✅ Dry Run: Açık
+
+⚠️ Gerçek işlem yapılmayacak!
+📊 Simülasyon modunda çalışıyor.
+
+Gerçek moda geçmek için: /real
+"""
+        await update.message.reply_text(msg.strip(), parse_mode='HTML')
+        await self.send_notification("🎮 DEMO moduna geçildi - Simülasyon aktif")
+        self.logger.info("🎮 Switched to DEMO mode (testnet + dry_run)")
+    
+    async def cmd_real(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Switch to real trading mode (mainnet + live orders)."""
+        # Check for open positions
+        open_positions = sum(1 for p in self.positions.values() if p.side != "FLAT")
+        if open_positions > 0:
+            await update.message.reply_text(f"⚠️ Mod değiştirmek için önce {open_positions} açık pozisyonu kapatın.")
+            return
+        
+        # Check if real API keys are configured
+        if not self.config.real_api_key or not self.config.real_api_secret:
+            await update.message.reply_text("❌ Gerçek API anahtarları ayarlanmamış!\n\n.env dosyasına REAL_API_KEY ve REAL_API_SECRET ekleyin.")
+            return
+        
+        # Already in real mode?
+        if not self.config.testnet and not self.config.dry_run:
+            await update.message.reply_text("💰 Zaten GERÇEK moddasınız!")
+            return
+        
+        # Require confirmation
+        if not context.args or context.args[0].lower() != 'confirm':
+            msg = """
+⚠️ <b>DİKKAT: GERÇEK PARA!</b>
+
+Bu komut gerçek Binance hesabınızla işlem yapacak!
+Gerçek paranızı kaybedebilirsiniz!
+
+Onaylamak için yazın:
+<code>/real confirm</code>
+"""
+            await update.message.reply_text(msg.strip(), parse_mode='HTML')
+            return
+        
+        # Switch to real mode
+        self.config.testnet = False
+        self.config.dry_run = False
+        self.config.api_key = self.config.real_api_key
+        self.config.api_secret = self.config.real_api_secret
+        
+        # Reinitialize exchange with real credentials
+        try:
+            success = self.initialize_exchange()
+            if not success:
+                raise Exception("Exchange initialization returned False")
+        except Exception as e:
+            # Rollback on failure
+            self.config.testnet = True
+            self.config.dry_run = True
+            error_msg = str(e)
+            await update.message.reply_text(f"❌ Gerçek hesaba bağlanılamadı!\n\n<b>Hata:</b> <code>{error_msg}</code>\n\nDemo moduna geri dönüldü.", parse_mode='HTML')
+            self.logger.error(f"Real mode connection failed: {e}")
+            return
+        
+        msg = """
+💰 <b>GERÇEK MOD AKTİF!</b>
+
+⚠️ Testnet: KAPALI
+⚠️ Dry Run: KAPALI
+
+🚨 <b>GERÇEK PARA İLE İŞLEM YAPILIYOR!</b>
+
+Demo moda geçmek için: /demo
+"""
+        await update.message.reply_text(msg.strip(), parse_mode='HTML')
+        await self.send_notification("🚨 GERÇEK MODA GEÇİLDİ - Dikkatli olun!")
+        self.logger.warning("🚨 SWITCHED TO REAL TRADING MODE!")
+    
+    async def cmd_dryrun(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Toggle dry run mode on/off without changing network."""
+        # Check for open positions
+        open_positions = sum(1 for p in self.positions.values() if p.side != "FLAT")
+        if open_positions > 0:
+            await update.message.reply_text(f"⚠️ Mod değiştirmek için önce {open_positions} açık pozisyonu kapatın.")
+            return
+        
+        # Toggle dry run
+        if context.args and context.args[0].lower() == 'off':
+            # Turn OFF dry run (enable real trading)
+            if not self.config.testnet:
+                # On mainnet, require confirmation
+                await update.message.reply_text("⚠️ Gerçek trading için /real confirm kullanın.")
+                return
+            self.config.dry_run = False
+            msg = """
+⚠️ <b>DRY RUN KAPALI</b>
+
+Artık gerçek işlemler yapılacak!
+Network: {}
+
+Simülasyona dönmek için: /dryrun on
+""".format('TESTNET' if self.config.testnet else 'MAINNET')
+        else:
+            # Turn ON dry run (simulation mode)
+            self.config.dry_run = True
+            msg = """
+🎮 <b>DRY RUN AÇIK</b>
+
+Simülasyon modu aktif - İşlem yapılmayacak.
+Network: {}
+
+Gerçek işlem için:
+• Testnet: /dryrun off
+• Mainnet: /real confirm
+""".format('TESTNET' if self.config.testnet else 'MAINNET')
+        
+        await update.message.reply_text(msg.strip(), parse_mode='HTML')
+        self.logger.info(f"Dry run mode: {self.config.dry_run}")
     
     async def cmd_coins(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Manage trading coins: /coins, /coins add BTC, /coins remove ETH"""
@@ -502,6 +796,118 @@ Komutlar: /help
             return
         
         await update.message.reply_text("❌ Geçersiz komut. /coins yazarak kullanımı görün.")
+    
+    async def cmd_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /history command - Show trade history and stats."""
+        stats = self.trade_history.get_stats()
+        recent = self.trade_history.get_recent(5)
+        
+        # Build recent trades text
+        if recent:
+            trades_text = ""
+            for trade in reversed(recent):  # Most recent first
+                emoji = "🟢" if trade.pnl_pct >= 0 else "🔴"
+                trades_text += f"  {emoji} {trade.coin}: {trade.pnl_pct:+.2f}% (${trade.pnl_usdt:+.2f})\n"
+        else:
+            trades_text = "  Henüz trade yok\n"
+        
+        # Win/loss emoji
+        if stats['total'] > 0:
+            wr_emoji = "🟢" if stats['win_rate'] >= 50 else "🔴"
+        else:
+            wr_emoji = "⚪"
+        
+        pnl_emoji = "🟢" if stats['total_pnl_pct'] >= 0 else "🔴"
+        
+        msg = f"""
+📜 <b>Trade History</b>
+
+📊 <b>İstatistikler:</b>
+• Toplam Trade: {stats['total']}
+• ✅ Kazanan: {stats['wins']}
+• ❌ Kaybeden: {stats['losses']}
+• {wr_emoji} Win Rate: {stats['win_rate']:.1f}%
+• {pnl_emoji} Toplam P&L: {stats['total_pnl_pct']:+.2f}% (${stats['total_pnl_usdt']:+.2f})
+
+📋 <b>Son 5 Trade:</b>
+{trades_text}
+<b>Komutlar:</b>
+/history export - CSV'ye aktar
+"""
+        await update.message.reply_text(msg.strip(), parse_mode='HTML')
+    
+    async def cmd_history_export(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /history export command."""
+        if context.args and context.args[0].lower() == 'export':
+            csv_path = PROJECT_ROOT / "trade_history" / f"trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            if self.trade_history.export_csv(csv_path):
+                await update.message.reply_text(f"✅ CSV dosyası oluşturuldu:\n{csv_path}")
+            else:
+                await update.message.reply_text("❌ CSV dosyası oluşturulamadı.")
+        else:
+            await self.cmd_history(update, context)
+    
+    async def cmd_safety(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /safety command - Show safety status and limits."""
+        usdt_balance = self.get_balance("USDT")
+        can_trade, safety_msg = self.check_safety_limits(usdt_balance)
+        
+        # Status emojis
+        status_emoji = "🟢" if can_trade else "🔴"
+        pause_emoji = "🔴 DURDURULDU" if self.safety_paused else "🟢 AKTİF"
+        
+        # Daily stats
+        daily_pnl_emoji = "🟢" if self.daily_pnl_pct >= 0 else "🔴"
+        loss_limit_pct = (self.daily_pnl_pct / self.config.daily_loss_limit_pct * 100) if self.config.daily_loss_limit_pct != 0 else 0
+        loss_limit_pct = max(0, min(100, loss_limit_pct))
+        
+        # Progress bars
+        trade_bar = self._progress_bar(self.daily_trades, self.config.max_daily_trades)
+        loss_bar = self._progress_bar(loss_limit_pct, 100)
+        
+        msg = f"""
+🛡️ <b>Güvenlik Durumu</b>
+
+{status_emoji} <b>Durum:</b> {safety_msg}
+
+📊 <b>Günlük İstatistikler:</b>
+• {daily_pnl_emoji} Günlük P&L: {self.daily_pnl_pct:+.2f}%
+• Trade Sayısı: {self.daily_trades}/{self.config.max_daily_trades}
+  {trade_bar}
+• Kayıp Limiti: {loss_limit_pct:.0f}%
+  {loss_bar}
+
+⚙️ <b>Limitler:</b>
+• Günlük Kayıp Limiti: {self.config.daily_loss_limit_pct:.1f}%
+• Max Günlük Trade: {self.config.max_daily_trades}
+• Min Bakiye: ${self.config.min_balance_usdt:.0f}
+
+💰 <b>Mevcut Bakiye:</b> ${usdt_balance:,.2f}
+🔄 <b>Trading:</b> {pause_emoji}
+
+<b>Komutlar:</b>
+/safety reset - Güvenlik kilidini sıfırla
+"""
+        await update.message.reply_text(msg.strip(), parse_mode='HTML')
+    
+    def _progress_bar(self, current: float, maximum: float, length: int = 10) -> str:
+        """Generate a text progress bar."""
+        if maximum <= 0:
+            return "░" * length
+        ratio = min(1.0, max(0.0, current / maximum))
+        filled = int(ratio * length)
+        return "█" * filled + "░" * (length - filled)
+    
+    async def cmd_safety_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /safety reset command."""
+        if context.args and context.args[0].lower() == 'reset':
+            self.safety_paused = False
+            self.daily_pnl_pct = 0.0
+            await update.message.reply_text("✅ Güvenlik kilidi sıfırlandı. Trading tekrar aktif.")
+            await self.send_notification("🔓 Güvenlik kilidi manuel olarak sıfırlandı.")
+            self.logger.info("🔓 Safety lock manually reset")
+        else:
+            await self.cmd_safety(update, context)
     
     # ========== NOTIFICATIONS ==========
     
@@ -642,7 +1048,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             
         except Exception as e:
             self.logger.error(f"❌ Failed to connect: {e}")
-            return False
+            raise  # Re-raise so calling code can see the error
     
     def get_balance(self, asset: str) -> float:
         """Get wallet balance."""
@@ -741,6 +1147,58 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.error(f"Prediction error for {coin}: {e}")
             return None
     
+    # ========== SAFETY CHECKS ==========
+    
+    def check_safety_limits(self, usdt_balance: float) -> Tuple[bool, str]:
+        """Check if trading should be allowed based on safety limits."""
+        # Check if safety paused
+        if self.safety_paused:
+            return (False, "🛑 Günlük kayıp limiti aşıldı - trading durduruldu")
+        
+        # Check daily loss limit
+        if self.daily_pnl_pct <= self.config.daily_loss_limit_pct:
+            self.safety_paused = True
+            return (False, f"🛑 Günlük kayıp limiti: {self.daily_pnl_pct:.2f}%")
+        
+        # Check max daily trades
+        if self.daily_trades >= self.config.max_daily_trades:
+            return (False, f"📊 Günlük trade limiti: {self.daily_trades}/{self.config.max_daily_trades}")
+        
+        # Check minimum balance
+        if usdt_balance < self.config.min_balance_usdt:
+            return (False, f"💰 Minimum bakiye: ${usdt_balance:.2f} < ${self.config.min_balance_usdt:.2f}")
+        
+        return (True, "✅ OK")
+    
+    def reset_daily_stats(self):
+        """Reset daily statistics at midnight."""
+        today = datetime.now().date()
+        if self.last_reset_date != today:
+            self.daily_trades = 0
+            self.daily_pnl_pct = 0.0
+            self.safety_paused = False
+            self.safety_alert_sent = False
+            self.last_reset_date = today
+            self.logger.info("📅 Günlük istatistikler sıfırlandı")
+    
+    async def send_safety_alert(self, reason: str):
+        """Send safety limit alert to Telegram."""
+        msg = f"""
+🚨 <b>GÜVENLİK UYARISI</b>
+
+{reason}
+
+📊 <b>Günlük Durum:</b>
+• P&L: {self.daily_pnl_pct:+.2f}%
+• Trade: {self.daily_trades}/{self.config.max_daily_trades}
+
+⚠️ Trading otomatik olarak durduruldu.
+✅ Sıfırlamak için: /safety reset
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+        await self.send_notification(msg.strip())
+    
     # ========== TRADING LOGIC ==========
     
     def should_trade(self, coin: str, prediction: Dict) -> Tuple[str, str]:
@@ -814,6 +1272,15 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             pos.amount = amount
             pos.entry_time = datetime.now()
             pos.entry_prediction = prediction['prediction'] * self.config.prediction_scale
+            pos.trade_id = str(uuid.uuid4())[:8]  # Short unique ID
+            
+            # Store pending trade info for history
+            self.pending_trades[coin] = {
+                'trade_id': pos.trade_id,
+                'entry_time': pos.entry_time.isoformat(),
+                'ai_prediction': prediction['prediction_pct'],
+                'ai_confidence': prediction['confidence']
+            }
             
             self.daily_trades += 1
             self.total_trades += 1
@@ -855,6 +1322,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             
             # Update stats
             self.cumulative_pnl_pct += pnl_pct
+            self.daily_pnl_pct += pnl_pct  # Track daily P&L for safety limits
             self.daily_trades += 1
             self.total_trades += 1
             
@@ -868,12 +1336,41 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 reason=reason
             )
             
+            # Save trade to history
+            pending = self.pending_trades.get(coin, {})
+            pnl_usdt = (price - pos.entry_price) * amount
+            
+            trade_record = TradeRecord(
+                trade_id=pending.get('trade_id', pos.trade_id or str(uuid.uuid4())[:8]),
+                coin=coin,
+                side="COMPLETE",
+                entry_price=pos.entry_price,
+                exit_price=price,
+                amount=amount,
+                entry_time=pending.get('entry_time', pos.entry_time.isoformat() if pos.entry_time else ''),
+                exit_time=datetime.now().isoformat(),
+                pnl_pct=pnl_pct,
+                pnl_usdt=pnl_usdt,
+                reason=reason,
+                ai_prediction=pending.get('ai_prediction', pos.entry_prediction * 100),
+                ai_confidence=pending.get('ai_confidence', 0),
+                trading_mode=self.config.trading_mode,
+                leverage=self.config.leverage if self.config.trading_mode == 'futures' else 1,
+                is_dry_run=self.config.dry_run
+            )
+            self.trade_history.add_trade(trade_record)
+            
+            # Clear pending trade
+            if coin in self.pending_trades:
+                del self.pending_trades[coin]
+            
             # Reset position
             pos.side = "FLAT"
             pos.entry_price = 0.0
             pos.amount = 0.0
             pos.entry_time = None
             pos.entry_prediction = 0.0
+            pos.trade_id = None
             
             return True
             
@@ -900,9 +1397,9 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 tf_minutes = {'15m': 15, '1h': 60}.get(tf, 15)
                 candle_minute = (now.minute // tf_minutes) * tf_minutes
                 
-                # Reset daily at midnight
+                # Reset daily stats at midnight
+                self.reset_daily_stats()
                 if now.hour == 0 and now.minute == 0:
-                    self.daily_trades = 0
                     await self.send_daily_summary()
                 
                 # Execute at start of new candle
@@ -914,6 +1411,19 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                     
                     usdt_balance = self.get_balance("USDT")
                     self.logger.info(f"💰 USDT: ${usdt_balance:,.2f}")
+                    
+                    # Check safety limits before trading
+                    can_trade, safety_msg = self.check_safety_limits(usdt_balance)
+                    if not can_trade:
+                        self.logger.warning(f"⚠️ {safety_msg}")
+                        # Send alert only once
+                        if not self.safety_alert_sent:
+                            await self.send_safety_alert(safety_msg)
+                            self.safety_alert_sent = True
+                        await asyncio.sleep(self.config.loop_interval_seconds)
+                        continue
+                    
+                    self.logger.info(f"📊 Günlük P&L: {self.daily_pnl_pct:+.2f}% | Trades: {self.daily_trades}")
                     
                     # Scan all configured coins
                     for coin in self.config.coins_to_trade:
@@ -972,6 +1482,11 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         self.telegram_app.add_handler(CommandHandler("spot", self.cmd_spot))
         self.telegram_app.add_handler(CommandHandler("futures", self.cmd_futures))
         self.telegram_app.add_handler(CommandHandler("coins", self.cmd_coins))
+        self.telegram_app.add_handler(CommandHandler("history", self.cmd_history_export))
+        self.telegram_app.add_handler(CommandHandler("safety", self.cmd_safety_reset))
+        self.telegram_app.add_handler(CommandHandler("demo", self.cmd_demo))
+        self.telegram_app.add_handler(CommandHandler("real", self.cmd_real))
+        self.telegram_app.add_handler(CommandHandler("dryrun", self.cmd_dryrun))
         
         # Start Telegram
         await self.telegram_app.initialize()
@@ -1035,6 +1550,8 @@ def main():
     config = BotConfig(
         api_key=env.get('BINANCE_API_KEY', ''),
         api_secret=env.get('BINANCE_API_SECRET', ''),
+        real_api_key=env.get('REAL_API_KEY', ''),
+        real_api_secret=env.get('REAL_API_SECRET', ''),
         telegram_bot_token=env.get('TELEGRAM_BOT_TOKEN', ''),
         telegram_chat_id=env.get('TELEGRAM_CHAT_ID', ''),
         testnet=env.get('TESTNET', 'true').lower() == 'true',
@@ -1050,7 +1567,11 @@ def main():
         prediction_scale=float(env.get('PREDICTION_SCALE', '0.5')),
         min_profit_to_exit=float(env.get('MIN_PROFIT_TO_EXIT', '0.0025')),
         stop_loss_pct=float(env.get('STOP_LOSS_PCT', '-0.05')),
-        max_loaded_models=int(env.get('MAX_LOADED_MODELS', '5'))
+        max_loaded_models=int(env.get('MAX_LOADED_MODELS', '5')),
+        # Safety limits
+        daily_loss_limit_pct=float(env.get('DAILY_LOSS_LIMIT_PCT', '-5.0')),
+        max_daily_trades=int(env.get('MAX_DAILY_TRADES', '20')),
+        min_balance_usdt=float(env.get('MIN_BALANCE_USDT', '50.0'))
     )
     
     # Check required settings
