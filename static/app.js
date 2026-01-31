@@ -1,6 +1,6 @@
 /**
  * Crypto MoE Scanner - Frontend Application
- * Handles API communication, real-time updates, and dual table management
+ * Handles API communication, real-time updates, and table management
  */
 
 // ============================================
@@ -8,14 +8,11 @@
 // ============================================
 const state = {
     isScanning: false,
-    isContinuousMode: false,
-    scanCycle: 0,
     results: {},
     pollInterval: null,
-    longSortColumn: 'prediction',
-    longSortDirection: 'desc',
-    shortSortColumn: 'prediction',
-    shortSortDirection: 'asc',
+    sortColumn: 'prediction',
+    sortDirection: 'desc',
+    filter: 'all',
     searchQuery: ''
 };
 
@@ -24,7 +21,6 @@ const state = {
 // ============================================
 const elements = {
     timeframeSelect: document.getElementById('timeframeSelect'),
-    continuousToggle: document.getElementById('continuousToggle'),
     scanBtn: document.getElementById('scanBtn'),
     stopBtn: document.getElementById('stopBtn'),
     statusBadge: document.getElementById('statusBadge'),
@@ -34,28 +30,24 @@ const elements = {
     progressBar: document.getElementById('progressBar'),
     progressPercent: document.getElementById('progressPercent'),
     progressResults: document.getElementById('progressResults'),
-    scanCycle: document.getElementById('scanCycle'),
     bullishCount: document.getElementById('bullishCount'),
     bearishCount: document.getElementById('bearishCount'),
-    riskCount: document.getElementById('riskCount'),
     totalScanned: document.getElementById('totalScanned'),
     errorCount: document.getElementById('errorCount'),
-    longResultsBody: document.getElementById('longResultsBody'),
-    shortResultsBody: document.getElementById('shortResultsBody'),
-    longTableCount: document.getElementById('longTableCount'),
-    shortTableCount: document.getElementById('shortTableCount'),
-    searchInput: document.getElementById('searchInput')
+    resultsBody: document.getElementById('resultsBody'),
+    searchInput: document.getElementById('searchInput'),
+    filterSelect: document.getElementById('filterSelect')
 };
 
 // ============================================
 // API Functions
 // ============================================
 const api = {
-    async startScan(timeframe, continuous = false) {
+    async startScan(timeframe) {
         const response = await fetch('/api/scan/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ timeframe, continuous })
+            body: JSON.stringify({ timeframe })
         });
         if (!response.ok) {
             const error = await response.json();
@@ -100,28 +92,16 @@ function updateProgress(status) {
     elements.progressBar.style.width = `${status.progress}%`;
     elements.progressPercent.textContent = `${status.progress}%`;
     elements.progressResults.textContent = `${status.results_count} results`;
-
-    // Show cycle number if in continuous mode
-    if (status.continuous_mode && status.scan_cycle > 0) {
-        elements.scanCycle.textContent = `Cycle #${status.scan_cycle}`;
-        elements.scanCycle.style.display = 'inline';
-    } else {
-        elements.scanCycle.style.display = 'none';
-    }
 }
 
 function updateStats(results) {
     const values = Object.values(results);
     const bullish = values.filter(r => r.prediction > 0).length;
     const bearish = values.filter(r => r.prediction < 0).length;
-    const risky = values.filter(r => r.is_high_risk).length;
 
     elements.bullishCount.textContent = bullish;
     elements.bearishCount.textContent = bearish;
-    elements.riskCount.textContent = risky;
     elements.totalScanned.textContent = values.length;
-    elements.longTableCount.textContent = bullish;
-    elements.shortTableCount.textContent = bearish;
 }
 
 function formatPrice(price) {
@@ -131,10 +111,33 @@ function formatPrice(price) {
     return price.toFixed(6);
 }
 
+function formatVolume(volume) {
+    if (!volume) return '-';
+    if (volume >= 1e9) return (volume / 1e9).toFixed(2) + 'B';
+    if (volume >= 1e6) return (volume / 1e6).toFixed(2) + 'M';
+    if (volume >= 1e3) return (volume / 1e3).toFixed(2) + 'K';
+    return volume.toFixed(0);
+}
+
 function formatTime(timeStr) {
     if (!timeStr) return '-';
+    // Format: "2026-01-03 01:14:58" -> "01:14:58"
     const parts = timeStr.split(' ');
     return parts.length > 1 ? parts[1] : timeStr;
+}
+
+function getSignalClass(prediction) {
+    if (prediction > 0.5) return 'bullish';
+    if (prediction < -0.5) return 'bearish';
+    return 'neutral';
+}
+
+function getSignalText(prediction) {
+    if (prediction > 1.5) return '🚀 Strong Buy';
+    if (prediction > 0.5) return '📈 Buy';
+    if (prediction < -1.5) return '💥 Strong Sell';
+    if (prediction < -0.5) return '📉 Sell';
+    return '➖ Neutral';
 }
 
 function getRsiClass(rsi) {
@@ -149,17 +152,21 @@ function getConfidenceClass(confidence) {
     return 'low-confidence';
 }
 
-function createRiskTooltip(riskReasons) {
-    if (!riskReasons || riskReasons.length === 0) return '';
-    return riskReasons.join('\n');
-}
+function renderResults(results) {
+    // Apply filters
+    let filtered = Object.entries(results);
 
-function renderTable(tableBody, data, sortColumn, sortDirection, isLong) {
-    // Apply search filter
-    let filtered = data;
+    // Search filter
     if (state.searchQuery) {
         const query = state.searchQuery.toLowerCase();
         filtered = filtered.filter(([pair]) => pair.toLowerCase().includes(query));
+    }
+
+    // Signal filter
+    if (state.filter === 'bullish') {
+        filtered = filtered.filter(([, data]) => data.prediction > 0);
+    } else if (state.filter === 'bearish') {
+        filtered = filtered.filter(([, data]) => data.prediction < 0);
     }
 
     // Sort
@@ -168,14 +175,14 @@ function renderTable(tableBody, data, sortColumn, sortDirection, isLong) {
         const [, dataB] = b;
 
         let valA, valB;
-        switch (sortColumn) {
+        switch (state.sortColumn) {
             case 'pair':
                 valA = a[0];
                 valB = b[0];
                 break;
             case 'prediction':
-                valA = Math.abs(dataA.prediction || 0);
-                valB = Math.abs(dataB.prediction || 0);
+                valA = dataA.prediction || 0;
+                valB = dataB.prediction || 0;
                 break;
             case 'price':
                 valA = dataA.price || 0;
@@ -185,13 +192,17 @@ function renderTable(tableBody, data, sortColumn, sortDirection, isLong) {
                 valA = dataA.rsi || 0;
                 valB = dataB.rsi || 0;
                 break;
-            case 'confidence':
-                valA = dataA.confidence || 0;
-                valB = dataB.confidence || 0;
+            case 'volume':
+                valA = dataA.volume || 0;
+                valB = dataB.volume || 0;
                 break;
             case 'time':
                 valA = dataA.updated_at || '';
                 valB = dataB.updated_at || '';
+                break;
+            case 'confidence':
+                valA = dataA.confidence || 0;
+                valB = dataB.confidence || 0;
                 break;
             default:
                 valA = Math.abs(dataA.prediction || 0);
@@ -199,24 +210,22 @@ function renderTable(tableBody, data, sortColumn, sortDirection, isLong) {
         }
 
         if (typeof valA === 'string') {
-            return sortDirection === 'asc'
+            return state.sortDirection === 'asc'
                 ? valA.localeCompare(valB)
                 : valB.localeCompare(valA);
         }
 
-        return sortDirection === 'asc' ? valA - valB : valB - valA;
+        return state.sortDirection === 'asc' ? valA - valB : valB - valA;
     });
 
     // Render
     if (filtered.length === 0) {
-        const emoji = isLong ? '📈' : '📉';
-        const text = isLong ? 'No long signals' : 'No short signals';
-        tableBody.innerHTML = `
+        elements.resultsBody.innerHTML = `
             <tr class="empty-row">
-                <td colspan="7">
+                <td colspan="8">
                     <div class="empty-state">
-                        <span class="empty-icon">${emoji}</span>
-                        <p>${text}</p>
+                        <span class="empty-icon">🔍</span>
+                        <p>No results match your filters.</p>
                     </div>
                 </td>
             </tr>
@@ -225,56 +234,28 @@ function renderTable(tableBody, data, sortColumn, sortDirection, isLong) {
     }
 
     const rows = filtered.map(([pair, data], index) => {
-        const predictionClass = isLong ? 'positive' : 'negative';
+        const signalClass = getSignalClass(data.prediction);
+        const predictionClass = data.prediction > 0 ? 'positive' : data.prediction < 0 ? 'negative' : '';
         const rsiClass = getRsiClass(data.rsi);
-        const displayPair = pair.replace(':USDT', '').replace('/USDT', '');
 
-        // Risk indicator
-        let riskCell = '<td class="risk-cell safe">✓</td>';
-        if (data.is_high_risk) {
-            const tooltip = createRiskTooltip(data.risk_reasons);
-            riskCell = `<td class="risk-cell risky" title="${tooltip}">⚠️</td>`;
-        }
+        // Clean pair name for display
+        const displayPair = pair.replace(':USDT', '');
 
         return `
-            <tr class="${data.is_high_risk ? 'high-risk-row' : ''}" style="animation-delay: ${index * 0.02}s">
-                ${riskCell}
+            <tr style="animation-delay: ${index * 0.02}s">
                 <td class="pair-cell">${displayPair}</td>
                 <td class="prediction-cell ${predictionClass}">${data.prediction.toFixed(4)}%</td>
-                <td class="confidence-cell ${getConfidenceClass(data.confidence)}">${data.confidence ? data.confidence.toFixed(0) + '%' : '-'}</td>
+                <td class="confidence-cell ${getConfidenceClass(data.confidence)}">${data.confidence ? data.confidence.toFixed(1) + '%' : '-'}</td>
                 <td class="price-cell">$${formatPrice(data.price)}</td>
                 <td class="rsi-cell ${rsiClass}">${data.rsi ? data.rsi.toFixed(1) : '-'}</td>
+                <td class="volume-cell">${formatVolume(data.volume)}</td>
+                <td><span class="signal-badge ${signalClass}">${getSignalText(data.prediction)}</span></td>
                 <td class="time-cell">${formatTime(data.updated_at)}</td>
             </tr>
         `;
     }).join('');
 
-    tableBody.innerHTML = rows;
-}
-
-function renderResults(results) {
-    const entries = Object.entries(results);
-
-    // Split into long and short
-    const longSignals = entries.filter(([, data]) => data.prediction > 0);
-    const shortSignals = entries.filter(([, data]) => data.prediction < 0);
-
-    // Render both tables
-    renderTable(
-        elements.longResultsBody,
-        longSignals,
-        state.longSortColumn,
-        state.longSortDirection,
-        true
-    );
-
-    renderTable(
-        elements.shortResultsBody,
-        shortSignals,
-        state.shortSortColumn,
-        state.shortSortDirection,
-        false
-    );
+    elements.resultsBody.innerHTML = rows;
 }
 
 // ============================================
@@ -282,24 +263,18 @@ function renderResults(results) {
 // ============================================
 async function startScan() {
     const timeframe = elements.timeframeSelect.value;
-    const continuous = elements.continuousToggle.checked;
 
     try {
-        await api.startScan(timeframe, continuous);
+        await api.startScan(timeframe);
 
         state.isScanning = true;
-        state.isContinuousMode = continuous;
         state.results = {};
 
         // Update UI
         elements.scanBtn.disabled = true;
         elements.stopBtn.disabled = false;
-        elements.timeframeSelect.disabled = true;
-        elements.continuousToggle.disabled = true;
         elements.progressSection.style.display = 'block';
-
-        const modeText = continuous ? 'Continuous Scanning...' : 'Scanning...';
-        updateStatus(modeText, true);
+        updateStatus('Scanning...', true);
 
         // Start polling
         startPolling();
@@ -313,14 +288,11 @@ async function stopScan() {
     try {
         await api.stopScan();
         state.isScanning = false;
-        state.isContinuousMode = false;
         stopPolling();
 
         // Update UI
         elements.scanBtn.disabled = false;
         elements.stopBtn.disabled = true;
-        elements.timeframeSelect.disabled = false;
-        elements.continuousToggle.disabled = false;
         updateStatus('Stopped', false);
 
     } catch (error) {
@@ -344,18 +316,16 @@ async function pollStatus() {
         updateStats(state.results);
         renderResults(state.results);
 
-        // Check if scan complete (only for non-continuous mode)
-        if (!status.is_scanning && state.isScanning && !status.continuous_mode) {
+        // Check if scan complete
+        if (!status.is_scanning && state.isScanning) {
             state.isScanning = false;
-            state.isContinuousMode = false;
             stopPolling();
 
             elements.scanBtn.disabled = false;
             elements.stopBtn.disabled = true;
-            elements.timeframeSelect.disabled = false;
-            elements.continuousToggle.disabled = false;
             updateStatus('Complete', false);
 
+            // Keep progress visible but update text
             elements.progressPair.textContent = 'Scan Complete!';
         }
 
@@ -380,32 +350,20 @@ function stopPolling() {
 // ============================================
 // Sorting Functions
 // ============================================
-function handleSort(column, table) {
-    if (table === 'long') {
-        if (state.longSortColumn === column) {
-            state.longSortDirection = state.longSortDirection === 'asc' ? 'desc' : 'asc';
-        } else {
-            state.longSortColumn = column;
-            state.longSortDirection = 'desc';
-        }
+function handleSort(column) {
+    if (state.sortColumn === column) {
+        state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
     } else {
-        if (state.shortSortColumn === column) {
-            state.shortSortDirection = state.shortSortDirection === 'asc' ? 'desc' : 'asc';
-        } else {
-            state.shortSortColumn = column;
-            state.shortSortDirection = 'desc';
-        }
+        state.sortColumn = column;
+        state.sortDirection = 'desc';
     }
 
     // Update header styles
-    const tableId = table === 'long' ? 'longTable' : 'shortTable';
-    document.querySelectorAll(`#${tableId} th.sortable`).forEach(th => {
+    document.querySelectorAll('.results-table th.sortable').forEach(th => {
         th.classList.remove('sorted', 'asc');
-        const sortCol = table === 'long' ? state.longSortColumn : state.shortSortColumn;
-        const sortDir = table === 'long' ? state.longSortDirection : state.shortSortDirection;
-        if (th.dataset.sort === sortCol) {
+        if (th.dataset.sort === state.sortColumn) {
             th.classList.add('sorted');
-            if (sortDir === 'asc') {
+            if (state.sortDirection === 'asc') {
                 th.classList.add('asc');
             }
         }
@@ -428,9 +386,15 @@ function initEventListeners() {
         renderResults(state.results);
     });
 
-    // Sorting for both tables
+    // Filter
+    elements.filterSelect.addEventListener('change', (e) => {
+        state.filter = e.target.value;
+        renderResults(state.results);
+    });
+
+    // Sorting
     document.querySelectorAll('.results-table th.sortable').forEach(th => {
-        th.addEventListener('click', () => handleSort(th.dataset.sort, th.dataset.table));
+        th.addEventListener('click', () => handleSort(th.dataset.sort));
     });
 }
 
@@ -440,16 +404,11 @@ function initEventListeners() {
 document.addEventListener('DOMContentLoaded', () => {
     initEventListeners();
 
-    // Set initial sort indicators
-    const longPredHeader = document.querySelector('#longTable [data-sort="prediction"]');
-    if (longPredHeader) {
-        longPredHeader.classList.add('sorted');
+    // Set initial sort indicator
+    const predictionHeader = document.querySelector('[data-sort="prediction"]');
+    if (predictionHeader) {
+        predictionHeader.classList.add('sorted');
     }
 
-    const shortPredHeader = document.querySelector('#shortTable [data-sort="prediction"]');
-    if (shortPredHeader) {
-        shortPredHeader.classList.add('sorted');
-    }
-
-    console.log('🧠 Crypto MoE Scanner initialized with dual tables');
+    console.log('🧠 Crypto MoE Scanner initialized');
 });

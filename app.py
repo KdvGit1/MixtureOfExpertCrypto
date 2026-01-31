@@ -26,14 +26,14 @@ from pydantic import BaseModel
 
 # Import from existing modules
 from train_models.data_fetcher import get_crypto_history, prepare_dual_dataframes
-from train_models.CryptoMoeApp.ai_engine_improved import MultiBranchModel, CNN_FEATURES, LSTM_FEATURES, TR_FEATURES
+from train_models.ai_engine_improved import MultiBranchModel, CNN_FEATURES, LSTM_FEATURES, TR_FEATURES
 
 # ============================================
 # CONFIGURATION
 # ============================================
 MODEL_MAP = {
-    '15m': PROJECT_ROOT / 'train_models' / 'CryptoMoeApp' / '15m_Moe.pth',
-    '1h': PROJECT_ROOT / 'train_models' / 'CryptoMoeApp' / '1h_Moe.pth'
+    '15m': PROJECT_ROOT / 'train_models' / 'finalized_models' / '3BranchApproach' / '6try' / 'BEST_MODEL_FINAL.pth',
+    '1h': PROJECT_ROOT / 'train_models' / 'finalized_models' / '3BranchApproach' / '7try_1h' / 'BEST_MODEL_FINAL.pth'
 }
 
 # Model parameters loaded from best_params JSON files

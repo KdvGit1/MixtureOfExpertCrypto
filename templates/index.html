@@ -42,13 +42,6 @@
                         </select>
                     </div>
                     <div class="control-group">
-                        <label class="toggle-label">
-                            <input type="checkbox" id="continuousToggle" class="toggle-input">
-                            <span class="toggle-switch"></span>
-                            <span class="toggle-text">🔄 Sonsuz Tarama</span>
-                        </label>
-                    </div>
-                    <div class="control-group">
                         <button id="scanBtn" class="btn btn-primary">
                             <span class="btn-icon">▶</span>
                             Start Scan
@@ -68,7 +61,6 @@
                 <div class="progress-header">
                     <span id="progressPair">Scanning...</span>
                     <span id="progressCount">0 / 0</span>
-                    <span id="scanCycle" class="scan-cycle"></span>
                 </div>
                 <div class="progress-bar-container">
                     <div class="progress-bar" id="progressBar" style="width: 0%"></div>
@@ -86,21 +78,14 @@
                 <div class="stat-icon">📈</div>
                 <div class="stat-content">
                     <span class="stat-value" id="bullishCount">0</span>
-                    <span class="stat-label">Long Signals</span>
+                    <span class="stat-label">Bullish Signals</span>
                 </div>
             </div>
             <div class="stat-card bearish">
                 <div class="stat-icon">📉</div>
                 <div class="stat-content">
                     <span class="stat-value" id="bearishCount">0</span>
-                    <span class="stat-label">Short Signals</span>
-                </div>
-            </div>
-            <div class="stat-card warning">
-                <div class="stat-icon">⚠️</div>
-                <div class="stat-content">
-                    <span class="stat-value" id="riskCount">0</span>
-                    <span class="stat-label">Riskli Tahmin</span>
+                    <span class="stat-label">Bearish Signals</span>
                 </div>
             </div>
             <div class="stat-card neutral">
@@ -111,7 +96,7 @@
                 </div>
             </div>
             <div class="stat-card error">
-                <div class="stat-icon">❌</div>
+                <div class="stat-icon">⚠️</div>
                 <div class="stat-content">
                     <span class="stat-value" id="errorCount">0</span>
                     <span class="stat-label">Errors</span>
@@ -119,73 +104,40 @@
             </div>
         </section>
 
-        <!-- Search and Filter -->
-        <section class="filter-section">
-            <div class="filter-card">
-                <input type="text" id="searchInput" class="search-input" placeholder="Search pairs...">
-            </div>
-        </section>
-
-        <!-- Results Tables - Side by Side -->
-        <section class="results-section dual-tables">
-            <!-- LONG Table -->
-            <div class="results-card long-table">
+        <!-- Results Table -->
+        <section class="results-section">
+            <div class="results-card">
                 <div class="results-header">
-                    <h2>📈 LONG Signals</h2>
-                    <span class="table-count" id="longTableCount">0</span>
+                    <h2>Scan Results</h2>
+                    <div class="filter-group">
+                        <input type="text" id="searchInput" class="search-input" placeholder="Search pairs...">
+                        <select id="filterSelect" class="select-input small">
+                            <option value="all">All Signals</option>
+                            <option value="bullish">Bullish Only</option>
+                            <option value="bearish">Bearish Only</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="table-container">
-                    <table class="results-table" id="longTable">
+                    <table class="results-table" id="resultsTable">
                         <thead>
                             <tr>
-                                <th>Risk</th>
-                                <th class="sortable" data-sort="pair" data-table="long">Pair</th>
-                                <th class="sortable" data-sort="prediction" data-table="long">AI %</th>
-                                <th class="sortable" data-sort="confidence" data-table="long">Conf</th>
-                                <th class="sortable" data-sort="price" data-table="long">Price</th>
-                                <th class="sortable" data-sort="rsi" data-table="long">RSI</th>
-                                <th class="sortable" data-sort="time" data-table="long">Time</th>
+                                <th class="sortable" data-sort="pair">Pair</th>
+                                <th class="sortable" data-sort="prediction">AI Prediction</th>
+                                <th class="sortable" data-sort="confidence">Confidence</th>
+                                <th class="sortable" data-sort="price">Price</th>
+                                <th class="sortable" data-sort="rsi">RSI</th>
+                                <th class="sortable" data-sort="volume">Volume</th>
+                                <th>Signal</th>
+                                <th class="sortable" data-sort="time">Time</th>
                             </tr>
                         </thead>
-                        <tbody id="longResultsBody">
+                        <tbody id="resultsBody">
                             <tr class="empty-row">
-                                <td colspan="7">
+                                <td colspan="8">
                                     <div class="empty-state">
-                                        <span class="empty-icon">📈</span>
-                                        <p>No long signals yet.</p>
-                                    </div>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- SHORT Table -->
-            <div class="results-card short-table">
-                <div class="results-header">
-                    <h2>📉 SHORT Signals</h2>
-                    <span class="table-count" id="shortTableCount">0</span>
-                </div>
-                <div class="table-container">
-                    <table class="results-table" id="shortTable">
-                        <thead>
-                            <tr>
-                                <th>Risk</th>
-                                <th class="sortable" data-sort="pair" data-table="short">Pair</th>
-                                <th class="sortable" data-sort="prediction" data-table="short">AI %</th>
-                                <th class="sortable" data-sort="confidence" data-table="short">Conf</th>
-                                <th class="sortable" data-sort="price" data-table="short">Price</th>
-                                <th class="sortable" data-sort="rsi" data-table="short">RSI</th>
-                                <th class="sortable" data-sort="time" data-table="short">Time</th>
-                            </tr>
-                        </thead>
-                        <tbody id="shortResultsBody">
-                            <tr class="empty-row">
-                                <td colspan="7">
-                                    <div class="empty-state">
-                                        <span class="empty-icon">📉</span>
-                                        <p>No short signals yet.</p>
+                                        <span class="empty-icon">🔍</span>
+                                        <p>No results yet. Start a scan to analyze the market.</p>
                                     </div>
                                 </td>
                             </tr>
@@ -197,7 +149,7 @@
 
         <!-- Footer -->
         <footer class="footer">
-            <p>Powered by Mixture of Experts AI • Binance Futures Data • ⚠️ = Riskli Tahmin (Yüksek Hata Oranı)</p>
+            <p>Powered by Mixture of Experts AI • Binance Futures Data</p>
         </footer>
     </div>
 
