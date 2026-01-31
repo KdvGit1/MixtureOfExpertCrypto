@@ -1,0 +1,37 @@
+{
+  "model_name": "SOL_15m",
+  "coin": "SOL",
+  "timeframe": "15m",
+  "baseline_accuracy": 52.34496435654178,
+  "feature_importance": {
+    "Log_Ret": 2.3637280942783363,
+    "Dist_SMA_50": 0.46095299351449626,
+    "RSI": 1.205981669078625,
+    "BB_PctB": 1.3774990620142518,
+    "Hour_Sin": 0.5038323417483994,
+    "Vol_Spike": 0.33231494881277257,
+    "Dist_EMA_200": 0.07503885940933941,
+    "Vol_Ratio": 0.23583641528648513,
+    "Hour_Cos": 0.3537546229297277,
+    "MACD_Norm": 0.0,
+    "Day_Cos": 0.2733558449911513,
+    "BB_Width": 0.17151739293562684,
+    "ATR_Pct": 0.06431902235085829,
+    "Day_Sin": 0.16615747440638984
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 1.3614193064265407,
+    "LSTM (Trend)": 0.7396687570348988,
+    "Transformer (Rejim)": 0.600310875274694
+  },
+  "params": {
+    "coin": "SOL",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T05:01:46.645037"
+}

@@ -1,0 +1,29 @@
+# Environment files (API keys)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+bot_logs/
+*.log
+
+# Model files (too large for git)
+*.pth
+*.pt
+
+# Data files
+*.csv

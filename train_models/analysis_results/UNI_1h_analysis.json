@@ -1,0 +1,37 @@
+{
+  "model_name": "UNI_1h",
+  "coin": "UNI",
+  "timeframe": "1h",
+  "baseline_accuracy": 51.61953727506427,
+  "feature_importance": {
+    "Log_Ret": 3.119108826049704,
+    "Dist_SMA_50": 0.5998286203941774,
+    "RSI": -0.4284490145672635,
+    "BB_PctB": 0.6169665809768645,
+    "Hour_Sin": -0.15424164524421968,
+    "Vol_Spike": -0.1713796058268997,
+    "Dist_EMA_200": 0.25706940874036377,
+    "Vol_Ratio": 0.3427592116538136,
+    "Hour_Cos": 1.0282776349614409,
+    "MACD_Norm": 0.6683804627249401,
+    "Day_Cos": 0.5655526992287889,
+    "BB_Width": -0.03427592116538136,
+    "ATR_Pct": -0.06855184233076272,
+    "Day_Sin": 0.6169665809768645
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.23993144815767664,
+    "LSTM (Trend)": 0.8397600685518469,
+    "Transformer (Rejim)": 1.1825192802056534
+  },
+  "params": {
+    "coin": "UNI",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 7013,
+  "analyzed_at": "2026-01-26T05:08:42.509200"
+}

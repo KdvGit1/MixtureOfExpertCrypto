@@ -1,0 +1,37 @@
+{
+  "model_name": "OP_1h",
+  "coin": "OP",
+  "timeframe": "1h",
+  "baseline_accuracy": 52.57027095467207,
+  "feature_importance": {
+    "Log_Ret": 2.8987196661425116,
+    "Dist_SMA_50": 0.05064573309698517,
+    "RSI": 2.076475056976456,
+    "BB_PctB": 2.3297037224613817,
+    "Hour_Sin": -0.6330716637123288,
+    "Vol_Spike": 1.1395289946822018,
+    "Dist_EMA_200": -0.27855153203342553,
+    "Vol_Ratio": 0.20258293238794778,
+    "Hour_Cos": 0.5824259306153436,
+    "MACD_Norm": -0.12661433274246292,
+    "Day_Cos": 0.12661433274246292,
+    "BB_Width": 0.025322866548492584,
+    "ATR_Pct": 0.6077487971638362,
+    "Day_Sin": 1.1395289946822018
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 1.8485692580400084,
+    "LSTM (Trend)": 0.8356545961002766,
+    "Transformer (Rejim)": 0.6837173968093211
+  },
+  "params": {
+    "coin": "OP",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 4776,
+  "analyzed_at": "2026-01-26T04:59:15.612653"
+}

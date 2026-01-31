@@ -1,0 +1,37 @@
+{
+  "model_name": "DOT_15m",
+  "coin": "DOT",
+  "timeframe": "15m",
+  "baseline_accuracy": 51.12862948636341,
+  "feature_importance": {
+    "Log_Ret": 1.8606473094060547,
+    "Dist_SMA_50": 0.08813592518238522,
+    "RSI": 0.499436909366878,
+    "BB_PctB": 0.3574401410174701,
+    "Hour_Sin": 0.06855016403074643,
+    "Vol_Spike": -0.25461489497136114,
+    "Dist_EMA_200": 0.044067962591185506,
+    "Vol_Ratio": -0.0832394848944844,
+    "Hour_Cos": 0.12241100719776199,
+    "MACD_Norm": -0.2888899769867379,
+    "Day_Cos": 0.004896440287907922,
+    "BB_Width": 0.009792880575822949,
+    "ATR_Pct": -0.02937864172747595,
+    "Day_Sin": 0.024482201439546714
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 1.444449884933647,
+    "LSTM (Trend)": 0.5924692748371925,
+    "Transformer (Rejim)": 1.0037702590216853
+  },
+  "params": {
+    "coin": "DOT",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T04:37:45.256439"
+}

@@ -1,0 +1,37 @@
+{
+  "model_name": "AVAX_1h",
+  "coin": "AVAX",
+  "timeframe": "1h",
+  "baseline_accuracy": 53.19266055045871,
+  "feature_importance": {
+    "Log_Ret": 2.3231749198528178,
+    "Dist_SMA_50": 0.07339449541284182,
+    "RSI": 1.7431192660550465,
+    "BB_PctB": 2.532110091743121,
+    "Hour_Sin": -0.12844036697248384,
+    "Vol_Spike": 0.6788990825688046,
+    "Dist_EMA_200": 0.018348623853214008,
+    "Vol_Ratio": 0.5504587155963208,
+    "Hour_Cos": 0.6238532110091697,
+    "MACD_Norm": 0.7155963302752255,
+    "Day_Cos": 0.47706422018348604,
+    "BB_Width": 1.4128440366972441,
+    "ATR_Pct": 0.07339449541284182,
+    "Day_Sin": 0.23853211009173236
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 1.963302752293572,
+    "LSTM (Trend)": 1.0275229357798068,
+    "Transformer (Rejim)": 1.449541284403665
+  },
+  "params": {
+    "coin": "AVAX",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 6994,
+  "analyzed_at": "2026-01-26T04:24:49.329251"
+}

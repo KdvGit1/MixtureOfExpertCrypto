@@ -1,0 +1,11 @@
+{
+  "coin": "LTC",
+  "timeframe": "1h",
+  "months_tested": 3,
+  "total_predictions": 460,
+  "correct_direction": 242,
+  "accuracy": 52.61,
+  "cumulative_return": 12.25,
+  "avg_prediction": 11.699,
+  "tested_at": "2026-01-27T15:16:49.331676"
+}

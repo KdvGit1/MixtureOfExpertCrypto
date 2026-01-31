@@ -1,0 +1,37 @@
+{
+  "model_name": "ADA_15m",
+  "coin": "ADA",
+  "timeframe": "15m",
+  "baseline_accuracy": 51.86473429951691,
+  "feature_importance": {
+    "Log_Ret": 1.910621369023744,
+    "Dist_SMA_50": -0.038647342995169254,
+    "RSI": 1.2753623188405854,
+    "BB_PctB": 0.29468599033817355,
+    "Hour_Sin": 0.03381642512077576,
+    "Vol_Spike": -0.028985507246375164,
+    "Dist_EMA_200": -0.3429951690821156,
+    "Vol_Ratio": 0.05797101449275033,
+    "Hour_Cos": -0.004830917874386387,
+    "MACD_Norm": -0.08695652173912549,
+    "Day_Cos": 0.014492753623194687,
+    "BB_Width": 0.12077294685990125,
+    "ATR_Pct": 0.06763285024155152,
+    "Day_Sin": -0.07729468599033851
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.6521739130434838,
+    "LSTM (Trend)": 0.5700483091787518,
+    "Transformer (Rejim)": -0.22705314009661492
+  },
+  "params": {
+    "coin": "ADA",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T04:12:01.684281"
+}

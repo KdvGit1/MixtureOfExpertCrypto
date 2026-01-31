@@ -1,0 +1,37 @@
+{
+  "model_name": "ARB_15m",
+  "coin": "ARB",
+  "timeframe": "15m",
+  "baseline_accuracy": 50.78328981723238,
+  "feature_importance": {
+    "Log_Ret": 1.7420821468937433,
+    "Dist_SMA_50": 0.31005221932115745,
+    "RSI": -0.34268929503915757,
+    "BB_PctB": 0.08159268929504293,
+    "Hour_Sin": 0.2529373368146324,
+    "Vol_Spike": 0.138707571801568,
+    "Dist_EMA_200": 0.16318537859007876,
+    "Vol_Ratio": -0.03263707571801433,
+    "Hour_Cos": 0.04079634464751791,
+    "MACD_Norm": 0.0489556135770286,
+    "Day_Cos": 0.13054830287207153,
+    "BB_Width": 0.138707571801568,
+    "ATR_Pct": -0.0979112271540501,
+    "Day_Sin": -0.17134464751957523
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.7996083550913866,
+    "LSTM (Trend)": 0.8159268929503938,
+    "Transformer (Rejim)": 0.26109660574412885
+  },
+  "params": {
+    "coin": "ARB",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 14938,
+  "analyzed_at": "2026-01-26T04:17:18.828751"
+}

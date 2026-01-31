@@ -1,0 +1,27 @@
+# Crypto MoE Scanner Requirements
+# ================================
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Crypto Exchange API
+ccxt>=4.1.0
+
+# Technical Analysis
+TA-Lib>=0.4.28
+
+# Deep Learning
+torch>=2.0.0
+
+# Telegram Bot
+python-telegram-bot>=20.0
+
+# Templates
+jinja2>=3.0.0

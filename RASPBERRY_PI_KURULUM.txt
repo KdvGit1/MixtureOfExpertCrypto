@@ -1,0 +1,225 @@
+# 🍓 Raspberry Pi 4 Kurulum Rehberi (Ekransız/Headless)
+# Telegram Auto-Trading Bot
+
+## 📋 Gereksinimler
+- Raspberry Pi 4 (8GB RAM önerilen)
+- MicroSD kart (32GB+)
+- Ethernet kablosu veya WiFi
+- Başka bir bilgisayar (kurulum için)
+
+---
+
+## 1️⃣ Raspberry Pi OS Kurulumu
+
+### Windows/Mac'te:
+1. Raspberry Pi Imager indir: https://www.raspberrypi.com/software/
+2. Imager'ı aç
+3. "Raspberry Pi OS Lite (64-bit)" seç (masaüstü YOK)
+4. Ayarlar (⚙️) butonuna tıkla:
+   - SSH'ı etkinleştir: ✓
+   - Kullanıcı adı: pi
+   - Şifre: [güçlü bir şifre belirle]
+   - WiFi ayarla (opsiyonel): SSID ve şifre gir
+   - Yerel ayarlar: Europe/Istanbul
+5. "Write" ile SD kartı yaz
+
+---
+
+## 2️⃣ Raspberry Pi'ye Bağlanma (SSH)
+
+### IP Adresini Bulma:
+1. Router yönetim paneline gir (genelde 192.168.1.1)
+2. "raspberrypi" adlı cihazın IP'sini bul
+   VEYA
+   Windows'ta: `arp -a` komutu çalıştır
+
+### SSH ile Bağlanma:
+```bash
+# Windows PowerShell veya Linux Terminal:
+ssh pi@192.168.1.XXX
+
+# İlk bağlantıda "yes" yaz
+# Şifreni gir
+```
+
+---
+
+## 3️⃣ Sistem Güncellemesi
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y git python3-pip python3-venv
+```
+
+---
+
+## 4️⃣ Projeyi İndirme
+
+```bash
+cd ~
+git clone https://github.com/KULLANICI_ADI/MixtureOfExpertCrypto.git
+cd MixtureOfExpertCrypto
+```
+
+VEYA Windows'tan dosyaları kopyala:
+```bash
+# Windows'ta (PowerShell):
+scp -r "C:\Users\KDV\Desktop\MixtureOfExpertCrypto\MixtureOfExpertCrypto" pi@192.168.1.XXX:~/
+```
+
+---
+
+## 5️⃣ Python Ortamı Kurulumu
+
+```bash
+cd ~/MixtureOfExpertCrypto
+
+# Virtual environment oluştur
+python3 -m venv venv
+source venv/bin/activate
+
+# Bağımlılıkları yükle
+pip install --upgrade pip
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+```
+
+> ⚠️ PyTorch kurulumu 10-15 dakika sürebilir, sabırlı ol!
+
+---
+
+## 6️⃣ Konfigürasyon
+
+```bash
+# .env dosyasını oluştur
+cp .env.example .env
+nano .env
+```
+
+Değiştir:
+```
+BINANCE_API_KEY=senin_api_key
+BINANCE_API_SECRET=senin_api_secret
+TELEGRAM_BOT_TOKEN=telegram_bot_token
+TELEGRAM_CHAT_ID=senin_chat_id
+TESTNET=true
+DRY_RUN=true
+AUTO_TRADE_COINS=BTC,ETH,SOL
+TRADING_MODE=spot
+```
+
+Kaydet: `Ctrl+X`, `Y`, `Enter`
+
+---
+
+## 7️⃣ Test Çalıştırma
+
+```bash
+source venv/bin/activate
+python telegram_trading_bot.py
+```
+
+Telegram'dan `/start` gönder, çalışıyor mu kontrol et.
+Durdurmak için: `Ctrl+C`
+
+---
+
+## 8️⃣ Otomatik Başlatma (Systemd Service)
+
+```bash
+sudo nano /etc/systemd/system/trading-bot.service
+```
+
+İçerik:
+```ini
+[Unit]
+Description=Crypto Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/MixtureOfExpertCrypto
+ExecStart=/home/pi/MixtureOfExpertCrypto/venv/bin/python telegram_trading_bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Kaydet ve etkinleştir:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable trading-bot
+sudo systemctl start trading-bot
+```
+
+---
+
+## 9️⃣ Bot Yönetimi (SSH ile)
+
+```bash
+# Durum kontrol
+sudo systemctl status trading-bot
+
+# Logları izle
+sudo journalctl -u trading-bot -f
+
+# Botu durdur
+sudo systemctl stop trading-bot
+
+# Botu başlat
+sudo systemctl start trading-bot
+
+# Botu yeniden başlat
+sudo systemctl restart trading-bot
+```
+
+---
+
+## 🔧 Sorun Giderme
+
+### SSH bağlanamıyorum:
+- Pi'nin aynı ağda olduğundan emin ol
+- Router'dan IP'yi kontrol et
+
+### "ModuleNotFoundError":
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Bellek yetersiz:
+```bash
+# Swap ekle
+sudo dphys-swapfile swapoff
+sudo nano /etc/dphys-swapfile
+# CONF_SWAPSIZE=2048 yap
+sudo dphys-swapfile setup
+sudo dphys-swapfile swapon
+```
+
+### Bot çöküyor:
+```bash
+sudo journalctl -u trading-bot --since "10 minutes ago"
+```
+
+---
+
+## 📱 Telegram'dan Kontrol
+
+Pi'ye SSH'a ihtiyaç duymadan Telegram'dan kontrol edebilirsin:
+- `/start` - Botu başlat
+- `/stop` - Botu duraklat
+- `/status` - Durum ve pozisyonlar
+- `/spot` - Spot moduna geç
+- `/futures 10` - Futures 10x'e geç
+
+---
+
+## ⚡ Performans İpuçları
+
+1. `MAX_LOADED_MODELS=3` yap (RAM kullanımı azalır)
+2. `AUTO_TRADE_COINS=BTC,ETH` ile coin sayısını azalt
+3. WiFi yerine Ethernet kullan (daha stabil)

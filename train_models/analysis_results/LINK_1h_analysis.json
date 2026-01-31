@@ -1,0 +1,37 @@
+{
+  "model_name": "LINK_1h",
+  "coin": "LINK",
+  "timeframe": "1h",
+  "baseline_accuracy": 51.93138667015844,
+  "feature_importance": {
+    "Log_Ret": 0.8060268167169298,
+    "Dist_SMA_50": -0.026188293832653642,
+    "RSI": 0.39282440748985437,
+    "BB_PctB": 1.178473222469556,
+    "Hour_Sin": -0.419012701322508,
+    "Vol_Spike": 0.11784732224695205,
+    "Dist_EMA_200": -0.379730260573524,
+    "Vol_Ratio": -0.5761424643184583,
+    "Hour_Cos": -0.20950635066125045,
+    "MACD_Norm": -0.39282440748984726,
+    "Day_Cos": -0.31425952599187923,
+    "BB_Width": 0.07856488149797514,
+    "ATR_Pct": -0.0916590284142984,
+    "Day_Sin": -0.22260049757758793
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.8118371088123624,
+    "LSTM (Trend)": 0.1964122037449343,
+    "Transformer (Rejim)": -0.44520099515516165
+  },
+  "params": {
+    "coin": "LINK",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 9202,
+  "analyzed_at": "2026-01-26T04:51:27.363473"
+}

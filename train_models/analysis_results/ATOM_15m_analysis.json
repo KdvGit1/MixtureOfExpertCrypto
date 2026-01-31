@@ -1,0 +1,37 @@
+{
+  "model_name": "ATOM_15m",
+  "coin": "ATOM",
+  "timeframe": "15m",
+  "baseline_accuracy": 50.86009174311926,
+  "feature_importance": {
+    "Log_Ret": 1.0060771445791161,
+    "Dist_SMA_50": 0.005212677231028806,
+    "RSI": 0.3023352793994931,
+    "BB_PctB": -0.5421184320266974,
+    "Hour_Sin": 0.05733944954128134,
+    "Vol_Spike": -0.2554211843202694,
+    "Dist_EMA_200": -0.010425354462050507,
+    "Vol_Ratio": 0.2554211843202623,
+    "Hour_Cos": -0.17723102585488704,
+    "MACD_Norm": 0.0,
+    "Day_Cos": 0.05212677231025964,
+    "BB_Width": 0.1251042535446203,
+    "ATR_Pct": -0.036488740617180326,
+    "Day_Sin": 0.03127606338615152
+  },
+  "branch_importance": {
+    "CNN (Refleks)": -0.8340283569641471,
+    "LSTM (Trend)": 0.3909507923269402,
+    "Transformer (Rejim)": 0.46392827356130084
+  },
+  "params": {
+    "coin": "ATOM",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T04:20:34.315109"
+}

@@ -1,0 +1,37 @@
+{
+  "model_name": "MATIC_1h",
+  "coin": "MATIC",
+  "timeframe": "1h",
+  "baseline_accuracy": 51.551219512195125,
+  "feature_importance": {
+    "Log_Ret": 0.9632148081574883,
+    "Dist_SMA_50": -0.1365853658536551,
+    "RSI": 0.5463414634146346,
+    "BB_PctB": -0.5268292682926798,
+    "Hour_Sin": -0.2536585365853625,
+    "Vol_Spike": -0.5073170731707322,
+    "Dist_EMA_200": -0.07804878048780495,
+    "Vol_Ratio": 0.05853658536585726,
+    "Hour_Cos": -0.05853658536585016,
+    "MACD_Norm": 0.09756097560975974,
+    "Day_Cos": -0.1560975609756099,
+    "BB_Width": -0.1365853658536551,
+    "ATR_Pct": 0.11707317073170742,
+    "Day_Sin": -0.19512195121951237
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.3121951219512198,
+    "LSTM (Trend)": -0.2731707317073173,
+    "Transformer (Rejim)": -0.17560975609755758
+  },
+  "params": {
+    "coin": "MATIC",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 7031,
+  "analyzed_at": "2026-01-26T04:57:06.706324"
+}

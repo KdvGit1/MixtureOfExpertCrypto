@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CryptoAI Pro - AI Model Dashboard for Investors</title>
+    <meta name="description"
+        content="Professional cryptocurrency AI predictions with 40 trained models. Backtest results, accuracy rankings, and real-time signals for informed investors.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Google AdSense -->
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXXXXX"
+        crossorigin="anonymous"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Legal Disclaimer Banner -->
+        <div class="disclaimer-banner" id="disclaimerBanner">
+            <div class="disclaimer-content">
+                <span class="disclaimer-icon">⚠️</span>
+                <span class="disclaimer-text">
+                    <strong>Risk Warning:</strong> This is NOT financial advice. Past performance does not guarantee
+                    future results. DYOR.
+                    <a href="#" onclick="showFullDisclaimer()">Learn more</a>
+                </span>
+                <button class="disclaimer-close" onclick="closeDisclaimer()">×</button>
+            </div>
+        </div>
+
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-icon">🧠</div>
+                <div class="logo-text">
+                    <h1>CryptoAI Pro</h1>
+                    <span class="tagline">AI-Powered Predictions • 40 Models</span>
+                </div>
+            </div>
+            <div class="header-controls">
+                <!-- Server Status -->
+                <div class="status-indicator">
+                    <span class="status-dot active"></span>
+                    <span class="status-text">Server Active</span>
+                </div>
+
+                <!-- Currency Selector -->
+                <div class="currency-selector">
+                    <select id="currencySelect" class="control-select">
+                        <option value="USD" selected>$ USD</option>
+                        <option value="EUR">€ EUR</option>
+                        <option value="TRY">₺ TRY</option>
+                        <option value="GBP">£ GBP</option>
+                    </select>
+                </div>
+
+                <!-- Theme Toggle -->
+                <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">
+                    <span class="theme-icon">🌙</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Featured Models Section - Carousel -->
+        <section class="featured-section" id="featuredSection">
+            <div class="featured-header">
+                <div class="featured-header-left">
+                    <h2>🏆 Top Performing Models</h2>
+                    <span class="featured-subtitle">Highest accuracy - Swipe or use arrows to browse</span>
+                </div>
+                <div class="featured-nav">
+                    <button class="nav-arrow" id="scrollLeft" onclick="scrollFeatured(-1)">←</button>
+                    <button class="nav-arrow" id="scrollRight" onclick="scrollFeatured(1)">→</button>
+                </div>
+            </div>
+            <div class="featured-carousel-wrapper" id="carouselWrapper">
+                <div class="featured-models" id="featuredModels">
+                    <!-- Will be populated by JS -->
+                    <div class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading top models...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="scroll-indicator" id="scrollIndicator"></div>
+        </section>
+
+        <!-- Backtest Rankings Section - Carousel -->
+        <section class="featured-section backtest-section-carousel" id="backtestSection">
+            <div class="featured-header">
+                <div class="featured-header-left">
+                    <h2>📊 Best Backtest Results</h2>
+                    <span class="featured-subtitle">Highest simulated returns over 3 months</span>
+                </div>
+                <div class="featured-nav">
+                    <button class="nav-arrow" id="scrollLeftBacktest" onclick="scrollBacktest(-1)">←</button>
+                    <button class="nav-arrow" id="scrollRightBacktest" onclick="scrollBacktest(1)">→</button>
+                </div>
+            </div>
+            <div class="featured-carousel-wrapper" id="backtestCarouselWrapper">
+                <div class="featured-models" id="backtestModels">
+                    <div class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading backtest rankings...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="scroll-indicator" id="backtestScrollIndicator"></div>
+        </section>
+
+        <!-- Ad Banner Top -->
+        <div class="ad-container ad-top">
+            <ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-XXXXXXXXXX" data-ad-slot="1234567890"
+                data-ad-format="horizontal" data-full-width-responsive="true"></ins>
+        </div>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Panel: Prediction Results -->
+            <aside class="model-list-panel">
+                <div class="panel-header">
+                    <h2>📈 Live Predictions</h2>
+                    <div class="filter-group">
+                        <select id="tfFilter" class="filter-select">
+                            <option value="all">All Timeframes</option>
+                            <option value="15m">15 Minutes</option>
+                            <option value="1h">1 Hour</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="model-list" id="modelList">
+                    <div class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading predictions...</p>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Right Panel: Model Detail -->
+            <section class="detail-panel" id="detailPanel">
+                <div class="empty-detail">
+                    <div class="empty-icon">👈</div>
+                    <h3>Select a Prediction</h3>
+                    <p>Choose a coin from the list to view accuracy, charts, and backtest results.</p>
+                    <div class="quick-stats">
+                        <p>✅ <strong>40 AI Models</strong> trained on historical data</p>
+                        <p>📈 <strong>20 Cryptocurrencies</strong> supported</p>
+                        <p>🔄 <strong>Auto-updated</strong> every 5 minutes</p>
+                        <p>📊 <strong>Daily backtests</strong> for verification</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Ad Banner Middle -->
+        <div class="ad-container ad-middle">
+            <ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-XXXXXXXXXX" data-ad-slot="2345678901"
+                data-ad-format="auto" data-full-width-responsive="true"></ins>
+        </div>
+
+        <!-- Footer with Legal -->
+        <footer class="footer">
+            <div class="footer-legal">
+                <h4>⚠️ Important Disclaimer</h4>
+                <p>
+                    The information provided on this platform is for <strong>educational and research purposes
+                        only</strong>.
+                    It does not constitute financial, investment, trading, or any other type of advice.
+                </p>
+                <p>
+                    <strong>Do Your Own Research (DYOR):</strong> Past performance does not guarantee future results.
+                    Cryptocurrency markets are highly volatile.
+                </p>
+            </div>
+            <div class="footer-bottom">
+                <p>CryptoAI Pro © 2026 • AI-Powered Research Platform • Not Financial Advice</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Disclaimer Modal -->
+    <div class="modal" id="disclaimerModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚠️ Full Risk Disclaimer</h2>
+                <button class="modal-close" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <h3>Not Financial Advice</h3>
+                <p>The content on this platform, including AI predictions, accuracy scores, and backtest results, is
+                    provided for informational and educational purposes only.</p>
+
+                <h3>No Guarantees</h3>
+                <p>Past performance does not guarantee future results. AI models may make incorrect predictions.</p>
+
+                <h3>High Risk Warning</h3>
+                <p>Cryptocurrency trading involves substantial risk of loss. Only trade with money you can afford to
+                    lose.</p>
+
+                <h3>Your Responsibility</h3>
+                <ul>
+                    <li>Do your own research (DYOR)</li>
+                    <li>Consult with a qualified financial advisor</li>
+                    <li>Never invest more than you can afford to lose</li>
+                </ul>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeModal()">I Understand the Risks</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+
+</html>

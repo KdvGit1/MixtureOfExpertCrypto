@@ -1,0 +1,37 @@
+{
+  "model_name": "BNB_15m",
+  "coin": "BNB",
+  "timeframe": "15m",
+  "baseline_accuracy": 51.704008450547626,
+  "feature_importance": {
+    "Log_Ret": 1.6316817564339061,
+    "Dist_SMA_50": -0.5392783677100041,
+    "RSI": -0.189025407238546,
+    "BB_PctB": 0.33913381886918614,
+    "Hour_Sin": -0.06115527881247118,
+    "Vol_Spike": -0.561516650914534,
+    "Dist_EMA_200": -0.03891699560792716,
+    "Vol_Ratio": -0.03891699560792716,
+    "Hour_Cos": -0.1667871240340162,
+    "MACD_Norm": 0.022238283204551124,
+    "Day_Cos": -0.30021682326123056,
+    "BB_Width": -0.094512703619273,
+    "ATR_Pct": -0.04447656640906672,
+    "Day_Sin": -0.35025296047143684
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 2.423972869294495,
+    "LSTM (Trend)": 0.2946572524601194,
+    "Transformer (Rejim)": -0.03891699560792716
+  },
+  "params": {
+    "coin": "BNB",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T04:27:23.416612"
+}

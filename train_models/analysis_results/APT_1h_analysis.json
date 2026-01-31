@@ -1,0 +1,37 @@
+{
+  "model_name": "APT_1h",
+  "coin": "APT",
+  "timeframe": "1h",
+  "baseline_accuracy": 51.52291488756049,
+  "feature_importance": {
+    "Log_Ret": 1.7508351154807116,
+    "Dist_SMA_50": -0.08539709649871696,
+    "RSI": -0.31312268716197167,
+    "BB_PctB": -0.17079419299743392,
+    "Hour_Sin": -0.08539709649871696,
+    "Vol_Spike": -0.17079419299743392,
+    "Dist_EMA_200": 0.1992598918303372,
+    "Vol_Ratio": 0.5408482778252264,
+    "Hour_Cos": 0.256191289496158,
+    "MACD_Norm": 0.256191289496158,
+    "Day_Cos": 0.0,
+    "BB_Width": -0.028465698832903286,
+    "ATR_Pct": -0.2846569883290684,
+    "Day_Sin": -0.2846569883290684
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.2277255906632547,
+    "LSTM (Trend)": 0.31312268716197167,
+    "Transformer (Rejim)": 0.37005408482778535
+  },
+  "params": {
+    "coin": "APT",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 4273,
+  "analyzed_at": "2026-01-26T04:15:32.999984"
+}

@@ -1,0 +1,37 @@
+{
+  "model_name": "FIL_1h",
+  "coin": "FIL",
+  "timeframe": "1h",
+  "baseline_accuracy": 50.82754938601175,
+  "feature_importance": {
+    "Log_Ret": 1.282175879147779,
+    "Dist_SMA_50": -0.40932550275849167,
+    "RSI": -0.8008542445274927,
+    "BB_PctB": -0.8364477665064811,
+    "Hour_Sin": -0.14237408791599648,
+    "Vol_Spike": -0.16017084890549427,
+    "Dist_EMA_200": -0.3381384588004934,
+    "Vol_Ratio": -0.6940736785904846,
+    "Hour_Cos": 0.10678056593700802,
+    "MACD_Norm": -0.8898380494749887,
+    "Day_Cos": -0.2313578928634925,
+    "BB_Width": -0.7474639615589851,
+    "ATR_Pct": -0.2313578928634925,
+    "Day_Sin": -0.08898380494748892
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.9254315714540056,
+    "LSTM (Trend)": 0.44491902473750145,
+    "Transformer (Rejim)": 0.498309307706009
+  },
+  "params": {
+    "coin": "FIL",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 6910,
+  "analyzed_at": "2026-01-26T04:45:06.183455"
+}

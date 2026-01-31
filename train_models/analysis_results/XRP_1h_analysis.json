@@ -1,0 +1,37 @@
+{
+  "model_name": "XRP_1h",
+  "coin": "XRP",
+  "timeframe": "1h",
+  "baseline_accuracy": 52.16593245227607,
+  "feature_importance": {
+    "Log_Ret": 2.893049646459133,
+    "Dist_SMA_50": -0.09789525208027072,
+    "RSI": 0.6852667645619235,
+    "BB_PctB": -0.048947626040138914,
+    "Hour_Sin": -0.12236906510034373,
+    "Vol_Spike": -0.14684287812040964,
+    "Dist_EMA_200": -0.048947626040138914,
+    "Vol_Ratio": -0.7097405775819823,
+    "Hour_Cos": -0.048947626040138914,
+    "MACD_Norm": 0.1590797846304497,
+    "Day_Cos": 0.036710719530098856,
+    "BB_Width": 0.024473813020065904,
+    "ATR_Pct": -0.09789525208027072,
+    "Day_Sin": 0.04894762604014602
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.2080274106705886,
+    "LSTM (Trend)": -0.061184532550171866,
+    "Transformer (Rejim)": -0.2080274106705815
+  },
+  "params": {
+    "coin": "XRP",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 10123,
+  "analyzed_at": "2026-01-26T05:12:04.551042"
+}

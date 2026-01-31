@@ -1,0 +1,37 @@
+{
+  "model_name": "TRX_1h",
+  "coin": "TRX",
+  "timeframe": "1h",
+  "baseline_accuracy": 49.01504575771677,
+  "feature_importance": {
+    "Log_Ret": -0.7306777744145307,
+    "Dist_SMA_50": -0.07755545214828885,
+    "RSI": -1.4580425003877764,
+    "BB_PctB": -1.0547541492166843,
+    "Hour_Sin": 0.21715526601520452,
+    "Vol_Spike": -0.38777726074143004,
+    "Dist_EMA_200": -0.5428881650380006,
+    "Vol_Ratio": -0.27919962773382423,
+    "Hour_Cos": -0.3102218085931412,
+    "MACD_Norm": 0.1551109042965777,
+    "Day_Cos": -0.4653327128897118,
+    "BB_Width": -0.44982162246005686,
+    "ATR_Pct": 0.0,
+    "Day_Sin": -0.8686210640608039
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 1.7217310376919528,
+    "LSTM (Trend)": -0.4808438033193667,
+    "Transformer (Rejim)": -2.2180859314409815
+  },
+  "params": {
+    "coin": "TRX",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 9986,
+  "analyzed_at": "2026-01-26T05:05:45.622036"
+}

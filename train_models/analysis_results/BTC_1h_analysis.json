@@ -1,0 +1,37 @@
+{
+  "model_name": "BTC_1h",
+  "coin": "BTC",
+  "timeframe": "1h",
+  "baseline_accuracy": 53.31686226065473,
+  "feature_importance": {
+    "Log_Ret": 3.0017751483354402,
+    "Dist_SMA_50": 0.2717726991970366,
+    "RSI": 1.6800494132180432,
+    "BB_PctB": 1.0994441012970952,
+    "Hour_Sin": 0.037059913526874766,
+    "Vol_Spike": 0.17294626312539663,
+    "Dist_EMA_200": 0.1852995676343454,
+    "Vol_Ratio": 0.5311920938851173,
+    "Hour_Cos": 0.17294626312539663,
+    "MACD_Norm": 0.1976528721433084,
+    "Day_Cos": 0.037059913526874766,
+    "BB_Width": 0.16059295861643363,
+    "ATR_Pct": -0.08647313156269121,
+    "Day_Sin": 0.0988264360716542
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 1.6059295861643008,
+    "LSTM (Trend)": 1.0747374922791906,
+    "Transformer (Rejim)": 0.7782581840642422
+  },
+  "params": {
+    "coin": "BTC",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 11054,
+  "analyzed_at": "2026-01-26T04:32:13.018425"
+}

@@ -1,0 +1,8 @@
+{
+  "coin": "APT",
+  "timeframe": "1h",
+  "embed_dim": 128,
+  "learning_rate": 0.0001752754276249831,
+  "batch_size": 1024,
+  "dropout": 0.3216365190144383
+}

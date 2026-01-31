@@ -1,0 +1,37 @@
+{
+  "model_name": "INJ_15m",
+  "coin": "INJ",
+  "timeframe": "15m",
+  "baseline_accuracy": 51.074127117388514,
+  "feature_importance": {
+    "Log_Ret": 0.20204845737566757,
+    "Dist_SMA_50": 0.029631092893481537,
+    "RSI": -0.009877030964489109,
+    "BB_PctB": 0.019754061928978217,
+    "Hour_Sin": -0.02963109289347443,
+    "Vol_Spike": 0.019754061928978217,
+    "Dist_EMA_200": 0.0444466393402152,
+    "Vol_Ratio": -0.02963109289347443,
+    "Hour_Cos": -0.11358585609166028,
+    "MACD_Norm": -0.08395476319817874,
+    "Day_Cos": -0.044446639340208094,
+    "BB_Width": 0.09383179416266785,
+    "ATR_Pct": -0.034569608375718985,
+    "Day_Sin": -0.03950812385796354
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 0.06420070126920052,
+    "LSTM (Trend)": 0.05432367030470431,
+    "Transformer (Rejim)": 0.0444466393402152
+  },
+  "params": {
+    "coin": "INJ",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T04:47:29.999194"
+}

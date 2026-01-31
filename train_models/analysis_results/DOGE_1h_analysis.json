@@ -1,0 +1,37 @@
+{
+  "model_name": "DOGE_1h",
+  "coin": "DOGE",
+  "timeframe": "1h",
+  "baseline_accuracy": 52.464322495218475,
+  "feature_importance": {
+    "Log_Ret": 3.4035652307629434,
+    "Dist_SMA_50": 0.0,
+    "RSI": 2.089156981021034,
+    "BB_PctB": 0.7356186552890946,
+    "Hour_Sin": 0.07356186552890875,
+    "Vol_Spike": 0.02942474621156066,
+    "Dist_EMA_200": 0.02942474621156066,
+    "Vol_Ratio": 0.16183610416359073,
+    "Hour_Cos": 0.500220685596588,
+    "MACD_Norm": 0.11769898484624974,
+    "Day_Cos": 0.02942474621156066,
+    "BB_Width": -0.08827423863469619,
+    "ATR_Pct": -0.10298661174046941,
+    "Day_Sin": -0.2942474621156492
+  },
+  "branch_importance": {
+    "CNN (Refleks)": -0.22068559658673337,
+    "LSTM (Trend)": -0.058849492423128424,
+    "Transformer (Rejim)": 0.45608356627923285
+  },
+  "params": {
+    "coin": "DOGE",
+    "timeframe": "1h",
+    "embed_dim": 128,
+    "learning_rate": 0.0001752754276249831,
+    "batch_size": 1024,
+    "dropout": 0.3216365190144383
+  },
+  "test_samples": 8592,
+  "analyzed_at": "2026-01-26T04:35:23.525414"
+}

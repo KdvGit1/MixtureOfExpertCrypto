@@ -1,0 +1,37 @@
+{
+  "model_name": "LTC_15m",
+  "coin": "LTC",
+  "timeframe": "15m",
+  "baseline_accuracy": 52.39751928603842,
+  "feature_importance": {
+    "Log_Ret": 2.7376553404601864,
+    "Dist_SMA_50": -0.13613674179398316,
+    "RSI": 0.9479150910099321,
+    "BB_PctB": 0.8420309585035,
+    "Hour_Sin": 0.06050521857510205,
+    "Vol_Spike": -0.2873997882317383,
+    "Dist_EMA_200": -0.06050521857510205,
+    "Vol_Ratio": -0.16134724953360546,
+    "Hour_Cos": -0.10084203095850341,
+    "MACD_Norm": -0.040336812383401366,
+    "Day_Cos": -0.11596833560228248,
+    "BB_Width": 0.07563152321887401,
+    "ATR_Pct": -0.22689456965663624,
+    "Day_Sin": -0.10588413250643214
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 2.233650985730847,
+    "LSTM (Trend)": 0.23697877275247947,
+    "Transformer (Rejim)": -0.25714717894418726
+  },
+  "params": {
+    "coin": "LTC",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T04:53:44.919556"
+}

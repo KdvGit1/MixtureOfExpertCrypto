@@ -1,0 +1,37 @@
+{
+  "model_name": "FIL_15m",
+  "coin": "FIL",
+  "timeframe": "15m",
+  "baseline_accuracy": 51.497491511680934,
+  "feature_importance": {
+    "Log_Ret": 1.7533302066502827,
+    "Dist_SMA_50": -0.010135306339648764,
+    "RSI": 0.7398773627932798,
+    "BB_PctB": 0.6233213398874895,
+    "Hour_Sin": -0.17736786094360468,
+    "Vol_Spike": -0.3192621496984742,
+    "Dist_EMA_200": 0.11655602290578315,
+    "Vol_Ratio": -0.16216490143415285,
+    "Hour_Cos": -0.44088582577408886,
+    "MACD_Norm": -0.14189428875489085,
+    "Day_Cos": -0.2381796989814049,
+    "BB_Width": 0.005067653169810171,
+    "ATR_Pct": 0.35473572188718805,
+    "Day_Sin": -0.48649470430244435
+  },
+  "branch_importance": {
+    "CNN (Refleks)": -1.054071859321951,
+    "LSTM (Trend)": 0.4054122535853537,
+    "Transformer (Rejim)": -0.09628541022652826
+  },
+  "params": {
+    "coin": "FIL",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T04:44:24.038192"
+}

@@ -1,0 +1,37 @@
+{
+  "model_name": "ETH_15m",
+  "coin": "ETH",
+  "timeframe": "15m",
+  "baseline_accuracy": 53.359976317347545,
+  "feature_importance": {
+    "Log_Ret": 3.4339700032196845,
+    "Dist_SMA_50": 0.167752121570949,
+    "RSI": 1.5837773830669093,
+    "BB_PctB": 1.0459838168541538,
+    "Hour_Sin": 0.26642984014210214,
+    "Vol_Spike": -0.17761989342805862,
+    "Dist_EMA_200": 0.28123149792777014,
+    "Vol_Ratio": 0.12828103414249625,
+    "Hour_Cos": 0.10361160449971152,
+    "MACD_Norm": 0.167752121570949,
+    "Day_Cos": 0.32070258535622287,
+    "BB_Width": 0.41444641799881765,
+    "ATR_Pct": 0.24669429642787577,
+    "Day_Sin": 0.42924807578449276
+  },
+  "branch_importance": {
+    "CNN (Refleks)": 2.0080915729228295,
+    "LSTM (Trend)": 0.5229919084270804,
+    "Transformer (Rejim)": 0.6266035129267777
+  },
+  "params": {
+    "coin": "ETH",
+    "timeframe": "15m",
+    "embed_dim": 96,
+    "learning_rate": 0.00012011972393497386,
+    "batch_size": 512,
+    "dropout": 0.3107166113032219
+  },
+  "test_samples": 25881,
+  "analyzed_at": "2026-01-26T04:40:53.745282"
+}

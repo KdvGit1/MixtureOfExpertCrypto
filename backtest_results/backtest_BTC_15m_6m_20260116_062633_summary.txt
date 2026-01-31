@@ -1,0 +1,13 @@
+BACKTEST SUMMARY: BTC / 15m
+==================================================
+
+Period: 6 months
+Total Candles: 17081
+Total Predictions: 16960
+
+Correct Direction: 8917
+Accuracy: 52.58%
+Avg Prediction: 2.6449%
+Avg Actual Return: -0.0013%
+Cumulative Return: 52.85%
+Max Drawdown: 16.70%

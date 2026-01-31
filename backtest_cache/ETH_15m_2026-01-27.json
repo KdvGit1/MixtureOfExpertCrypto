@@ -1,0 +1,11 @@
+{
+  "coin": "ETH",
+  "timeframe": "15m",
+  "months_tested": 3,
+  "total_predictions": 835,
+  "correct_direction": 458,
+  "accuracy": 54.85,
+  "cumulative_return": 20.56,
+  "avg_prediction": 13.0564,
+  "tested_at": "2026-01-27T15:18:37.306515"
+}
