@@ -3,11 +3,35 @@ Backtest Module for AI Models (Auto All-Models Version)
 Tests all AI prediction models from kaggle_outputs on historical cryptocurrency data.
 
 Usage:
-    python backtest.py                        # Run all 40 models (all coins, all timeframes)
-    python backtest.py --coin BTC             # Run only BTC models (both timeframes)
-    python backtest.py --timeframe 1h         # Run only 1h models (all coins)
-    python backtest.py --coin BTC --timeframe 1h  # Run single model
-    python backtest.py --months 6             # Set backtest period (default: 3)
+    # Tüm modelleri test et
+    python backtest.py                              # 40 model (tüm coinler, tüm timeframe'ler)
+    python backtest.py --charts                     # + Her model için grafik üret
+    
+    # Filtreli test
+    python backtest.py --coin BTC                   # Sadece BTC modelleri (15m + 1h)
+    python backtest.py --timeframe 1h               # Sadece 1h modelleri (tüm coinler)
+    python backtest.py --coin BTC --timeframe 1h    # Tek model
+    python backtest.py --months 6                   # 6 aylık veri (varsayılan: 3)
+    
+    # Strateji Karşılaştırması (HODL vs Grid 2/3/4 vs Normal Trading)
+    python backtest.py --compare                    # TÜM modeller için karşılaştır
+    python backtest.py --compare --timeframe 15m    # Sadece 15m modelleri karşılaştır
+    python backtest.py --coin BTC --timeframe 15m --compare   # Tek model karşılaştır
+    python backtest.py --compare --months 6         # 6 aylık veri ile
+    
+    Karşılaştırılan Stratejiler:
+    - HODL (al ve tut)
+    - Grid (2 levels) - %60/%40 alım, +2%/+4% satış
+    - Grid (3 levels) - %50/%30/%20 alım, +1.5%/+3%/+5% satış
+    - Grid (4 levels) - %40/%30/%20/%10 alım, +1%/+2%/+3.5%/+5% satış
+    - Normal Trading (tek al/sat)
+    
+Arguments:
+    -c, --coin          Coin filtresi (BTC, ETH, SOL, vb.)
+    -t, --timeframe     Timeframe filtresi (15m veya 1h)
+    -m, --months        Backtest süresi (ay, varsayılan: 3)
+    --charts            Her model için ayrı grafik üret
+    --compare           5 strateji karşılaştırması (tüm modeller veya filtreli)
 """
 import os
 import sys
@@ -73,6 +97,18 @@ class BacktestResults:
     sharpe_ratio: float = 0.0
     profit_factor: float = 0.0
     trades: List[TradeResult] = field(default_factory=list)
+
+@dataclass
+class StrategyResult:
+    """Results for a single strategy simulation."""
+    strategy_name: str
+    total_return_pct: float
+    max_drawdown_pct: float
+    total_trades: int
+    win_rate: float
+    sharpe_ratio: float
+    equity_curve: List[float] = field(default_factory=list)
+    timestamps: List[datetime] = field(default_factory=list)
 
 # ============================================
 # MODEL DISCOVERY
@@ -369,6 +405,407 @@ class Backtester:
             print(f"✅ Backtest complete! Processed {len(trades)} predictions.")
         return results
     
+    def simulate_hodl(self, df_display: pd.DataFrame, initial_balance: float = 1000.0) -> StrategyResult:
+        """Simulate buy and hold strategy."""
+        prices = df_display['Close'].values
+        timestamps = df_display.index.tolist()
+        
+        # Buy at start, hold until end
+        start_price = prices[0]
+        amount = initial_balance / start_price
+        
+        # Track equity curve
+        equity_curve = [amount * p for p in prices]
+        
+        # Calculate metrics
+        end_value = equity_curve[-1]
+        total_return = ((end_value - initial_balance) / initial_balance) * 100
+        
+        # Max drawdown
+        running_max = np.maximum.accumulate(equity_curve)
+        drawdowns = (running_max - equity_curve) / running_max * 100
+        max_drawdown = np.max(drawdowns)
+        
+        # Sharpe (daily returns approximation)
+        returns = np.diff(equity_curve) / equity_curve[:-1]
+        sharpe = (np.mean(returns) / np.std(returns)) * np.sqrt(365 * 24 * 4) if np.std(returns) > 0 else 0
+        
+        return StrategyResult(
+            strategy_name="HODL",
+            total_return_pct=total_return,
+            max_drawdown_pct=max_drawdown,
+            total_trades=1,  # Just 1 buy
+            win_rate=100.0 if total_return > 0 else 0.0,
+            sharpe_ratio=sharpe,
+            equity_curve=equity_curve,
+            timestamps=timestamps
+        )
+    
+    def simulate_grid_trading(self, df_display: pd.DataFrame, df_ai: pd.DataFrame, 
+                              initial_balance: float = 1000.0, grid_levels: int = 2,
+                              threshold: float = 0.001) -> StrategyResult:
+        """Simulate grid trading strategy with DCA and partial sells."""
+        # Grid allocations and targets
+        if grid_levels == 2:
+            buy_allocs = [0.6, 0.4]
+            sell_targets = [0.02, 0.04]
+        elif grid_levels == 3:
+            buy_allocs = [0.5, 0.3, 0.2]
+            sell_targets = [0.015, 0.03, 0.05]
+        else:
+            buy_allocs = [0.4, 0.3, 0.2, 0.1]
+            sell_targets = [0.01, 0.02, 0.035, 0.05]
+        
+        stop_loss = -0.05
+        
+        prices = df_display['Close'].values
+        timestamps = df_display.index.tolist()
+        max_window = max(CNN_WINDOW, LSTM_WINDOW, TR_WINDOW)
+        
+        # State tracking
+        balance = initial_balance
+        position_amount = 0.0
+        grid_entries = []  # List of (price, amount)
+        buy_grid_level = 0
+        sell_grid_level = 0
+        total_trades = 0
+        wins = 0
+        equity_curve = []
+        
+        for i in range(len(prices)):
+            current_price = prices[i]
+            
+            # Calculate equity
+            equity = balance + (position_amount * current_price)
+            equity_curve.append(equity)
+            
+            # Skip warmup period
+            if i < max_window + 1 or i >= len(df_ai) - 1:
+                continue
+            
+            # Get prediction
+            x_cnn, x_lstm, x_tr = self.prepare_model_input(df_ai, i + 1)
+            if x_cnn is None:
+                continue
+            
+            with torch.no_grad():
+                pred_main, _, _, _ = self.model(x_cnn, x_lstm, x_tr)
+                prediction = pred_main.item() / 100.0
+            
+            # === GRID LOGIC ===
+            if position_amount > 0:
+                # Calculate average entry
+                total_cost = sum(e[0] * e[1] for e in grid_entries)
+                total_amount = sum(e[1] for e in grid_entries)
+                avg_entry = total_cost / total_amount if total_amount > 0 else current_price
+                pnl_pct = (current_price - avg_entry) / avg_entry
+                
+                # Stop-loss: sell all
+                if pnl_pct <= stop_loss:
+                    balance += position_amount * current_price
+                    if pnl_pct > 0:
+                        wins += 1
+                    total_trades += 1
+                    position_amount = 0.0
+                    grid_entries = []
+                    buy_grid_level = 0
+                    sell_grid_level = 0
+                    continue
+                
+                # Check grid sell targets
+                if sell_grid_level < len(sell_targets):
+                    target = sell_targets[sell_grid_level]
+                    if pnl_pct >= target:
+                        # Partial sell
+                        sell_pct = buy_allocs[sell_grid_level]
+                        sell_amount = position_amount * sell_pct
+                        balance += sell_amount * current_price
+                        position_amount -= sell_amount
+                        sell_grid_level += 1
+                        total_trades += 1
+                        wins += 1  # Taking profit = win
+                        
+                        if position_amount < 0.0001:
+                            grid_entries = []
+                            buy_grid_level = 0
+                            sell_grid_level = 0
+                        continue
+                
+                # Check for additional grid buy
+                if buy_grid_level < len(buy_allocs) and prediction > threshold:
+                    price_drop = (avg_entry - current_price) / avg_entry
+                    if price_drop >= 0.01:  # 1% drop
+                        alloc = buy_allocs[buy_grid_level]
+                        buy_usdt = initial_balance * alloc * 0.5  # Use half of allocation for adds
+                        if balance >= buy_usdt:
+                            amount = buy_usdt / current_price
+                            grid_entries.append((current_price, amount))
+                            position_amount += amount
+                            balance -= buy_usdt
+                            buy_grid_level += 1
+                            total_trades += 1
+            
+            else:
+                # No position - check for entry
+                if prediction > threshold and balance > 10:
+                    alloc = buy_allocs[0]
+                    buy_usdt = min(balance, initial_balance * alloc)
+                    amount = buy_usdt / current_price
+                    grid_entries.append((current_price, amount))
+                    position_amount = amount
+                    balance -= buy_usdt
+                    buy_grid_level = 1
+                    sell_grid_level = 0
+                    total_trades += 1
+        
+        # Final equity
+        final_equity = balance + (position_amount * prices[-1])
+        total_return = ((final_equity - initial_balance) / initial_balance) * 100
+        
+        # Max drawdown
+        running_max = np.maximum.accumulate(equity_curve)
+        drawdowns = (running_max - np.array(equity_curve)) / running_max * 100
+        max_drawdown = np.max(drawdowns) if len(drawdowns) > 0 else 0
+        
+        # Sharpe
+        returns = np.diff(equity_curve) / np.array(equity_curve[:-1])
+        sharpe = (np.mean(returns) / np.std(returns)) * np.sqrt(365 * 24 * 4) if np.std(returns) > 0 else 0
+        
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        
+        return StrategyResult(
+            strategy_name=f"Grid ({grid_levels} levels)",
+            total_return_pct=total_return,
+            max_drawdown_pct=max_drawdown,
+            total_trades=total_trades,
+            win_rate=win_rate,
+            sharpe_ratio=sharpe,
+            equity_curve=equity_curve,
+            timestamps=timestamps
+        )
+    
+    def simulate_normal_trading(self, df_display: pd.DataFrame, df_ai: pd.DataFrame,
+                                 initial_balance: float = 1000.0, threshold: float = 0.001) -> StrategyResult:
+        """Simulate normal single buy/sell trading based on AI predictions."""
+        prices = df_display['Close'].values
+        timestamps = df_display.index.tolist()
+        max_window = max(CNN_WINDOW, LSTM_WINDOW, TR_WINDOW)
+        
+        stop_loss = -0.05
+        take_profit = 0.03
+        
+        balance = initial_balance
+        position_amount = 0.0
+        entry_price = 0.0
+        total_trades = 0
+        wins = 0
+        equity_curve = []
+        
+        for i in range(len(prices)):
+            current_price = prices[i]
+            equity = balance + (position_amount * current_price)
+            equity_curve.append(equity)
+            
+            if i < max_window + 1 or i >= len(df_ai) - 1:
+                continue
+            
+            x_cnn, x_lstm, x_tr = self.prepare_model_input(df_ai, i + 1)
+            if x_cnn is None:
+                continue
+            
+            with torch.no_grad():
+                pred_main, _, _, _ = self.model(x_cnn, x_lstm, x_tr)
+                prediction = pred_main.item() / 100.0
+            
+            if position_amount > 0:
+                pnl_pct = (current_price - entry_price) / entry_price
+                
+                # Stop-loss or take profit
+                should_sell = False
+                if pnl_pct <= stop_loss:
+                    should_sell = True
+                elif pnl_pct >= take_profit:
+                    should_sell = True
+                    wins += 1
+                elif prediction < -threshold and pnl_pct > 0:
+                    should_sell = True
+                    wins += 1
+                
+                if should_sell:
+                    balance += position_amount * current_price
+                    position_amount = 0.0
+                    total_trades += 1
+            else:
+                # Check for buy signal
+                if prediction > threshold and balance > 10:
+                    buy_usdt = balance * 0.95
+                    position_amount = buy_usdt / current_price
+                    entry_price = current_price
+                    balance -= buy_usdt
+                    total_trades += 1
+        
+        final_equity = balance + (position_amount * prices[-1])
+        total_return = ((final_equity - initial_balance) / initial_balance) * 100
+        
+        running_max = np.maximum.accumulate(equity_curve)
+        drawdowns = (running_max - np.array(equity_curve)) / running_max * 100
+        max_drawdown = np.max(drawdowns) if len(drawdowns) > 0 else 0
+        
+        returns = np.diff(equity_curve) / np.array(equity_curve[:-1])
+        sharpe = (np.mean(returns) / np.std(returns)) * np.sqrt(365 * 24 * 4) if np.std(returns) > 0 else 0
+        
+        win_rate = (wins / (total_trades // 2) * 100) if total_trades > 1 else 0
+        
+        return StrategyResult(
+            strategy_name="Normal Trading",
+            total_return_pct=total_return,
+            max_drawdown_pct=max_drawdown,
+            total_trades=total_trades,
+            win_rate=win_rate,
+            sharpe_ratio=sharpe,
+            equity_curve=equity_curve,
+            timestamps=timestamps
+        )
+    
+    def run_strategy_comparison(self, grid_levels: int = 2) -> Optional[List[StrategyResult]]:
+        """Run comparison of HODL, Grid, and Normal trading strategies."""
+        print(f"\n📊 Running Strategy Comparison for {self.coin}/{self.timeframe}...")
+        
+        if not self.load_model():
+            return None
+        
+        df_raw = self.fetch_data()
+        if df_raw is None or len(df_raw) < LSTM_WINDOW + 100:
+            print(f"❌ Insufficient data.")
+            return None
+        
+        df_display, df_ai = self.prepare_data(df_raw)
+        if df_ai is None:
+            return None
+        
+        print("🔄 Simulating strategies...")
+        
+        # Run all strategies: HODL + Grid (2,3,4 levels) + Normal
+        hodl_result = self.simulate_hodl(df_display)
+        grid2_result = self.simulate_grid_trading(df_display, df_ai, grid_levels=2)
+        grid3_result = self.simulate_grid_trading(df_display, df_ai, grid_levels=3)
+        grid4_result = self.simulate_grid_trading(df_display, df_ai, grid_levels=4)
+        normal_result = self.simulate_normal_trading(df_display, df_ai)
+        
+        results = [hodl_result, grid2_result, grid3_result, grid4_result, normal_result]
+        
+        # Print comparison
+        print("\n" + "=" * 80)
+        print(f"📊 STRATEGY COMPARISON: {self.coin}/{self.timeframe} ({self.months_back} months)")
+        print("=" * 80)
+        print(f"\n{'Strategy':<20} {'Return':<12} {'Max DD':<12} {'Trades':<10} {'Win Rate':<12} {'Sharpe':<10}")
+        print("-" * 80)
+        
+        for r in results:
+            ret_color = "🟢" if r.total_return_pct > 0 else "🔴"
+            print(f"{r.strategy_name:<20} {ret_color}{r.total_return_pct:>+8.2f}%   "
+                  f"{r.max_drawdown_pct:>8.2f}%   {r.total_trades:>6}     "
+                  f"{r.win_rate:>8.1f}%   {r.sharpe_ratio:>8.2f}")
+        
+        print("-" * 80)
+        
+        # Best strategy
+        best = max(results, key=lambda x: x.total_return_pct)
+        print(f"\n🏆 Best Strategy: {best.strategy_name} ({best.total_return_pct:+.2f}%)")
+        
+        # Best grid
+        grid_results = [r for r in results if 'Grid' in r.strategy_name]
+        best_grid = max(grid_results, key=lambda x: x.total_return_pct)
+        print(f"📊 Best Grid: {best_grid.strategy_name} ({best_grid.total_return_pct:+.2f}%)")
+        
+        # Generate chart
+        self.generate_comparison_chart(results)
+        
+        return results
+    
+    def generate_comparison_chart(self, results: List[StrategyResult]) -> None:
+        """Generate comparison chart for all strategies."""
+        output_dir = PROJECT_ROOT / "backtest_results"
+        output_dir.mkdir(exist_ok=True)
+        
+        plt.style.use('seaborn-v0_8-darkgrid')
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle(f'Strategy Comparison: {self.coin}/{self.timeframe} ({self.months_back} months)', 
+                     fontsize=14, fontweight='bold')
+        
+        colors = {'HODL': '#3498db', 'Grid': '#2ecc71', 'Normal Trading': '#e74c3c'}
+        
+        # 1. Equity Curves
+        ax1 = axes[0, 0]
+        for r in results:
+            color = colors.get(r.strategy_name.split()[0], '#9b59b6')
+            # Normalize to percentage
+            initial = r.equity_curve[0] if r.equity_curve else 1000
+            normalized = [(e / initial - 1) * 100 for e in r.equity_curve]
+            ax1.plot(r.timestamps, normalized, label=r.strategy_name, linewidth=1.5, color=color)
+        ax1.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        ax1.set_title('Equity Curves (% Return)', fontweight='bold')
+        ax1.set_xlabel('Date')
+        ax1.set_ylabel('Return (%)')
+        ax1.legend()
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        ax1.tick_params(axis='x', rotation=45)
+        
+        # 2. Return Comparison Bar
+        ax2 = axes[0, 1]
+        names = [r.strategy_name for r in results]
+        returns = [r.total_return_pct for r in results]
+        bar_colors = ['#2ecc71' if r > 0 else '#e74c3c' for r in returns]
+        ax2.bar(names, returns, color=bar_colors, edgecolor='white')
+        ax2.axhline(y=0, color='black', linestyle='-', linewidth=1)
+        ax2.set_title('Total Return Comparison', fontweight='bold')
+        ax2.set_ylabel('Return (%)')
+        for i, (n, r) in enumerate(zip(names, returns)):
+            ax2.text(i, r + (1 if r >= 0 else -3), f'{r:.1f}%', ha='center', fontweight='bold')
+        
+        # 3. Max Drawdown Comparison
+        ax3 = axes[1, 0]
+        drawdowns = [r.max_drawdown_pct for r in results]
+        ax3.bar(names, drawdowns, color='#e74c3c', edgecolor='white', alpha=0.7)
+        ax3.set_title('Max Drawdown Comparison', fontweight='bold')
+        ax3.set_ylabel('Drawdown (%)')
+        for i, (n, d) in enumerate(zip(names, drawdowns)):
+            ax3.text(i, d + 0.5, f'{d:.1f}%', ha='center')
+        
+        # 4. Summary Table
+        ax4 = axes[1, 1]
+        ax4.axis('off')
+        table_data = []
+        for r in results:
+            table_data.append([
+                r.strategy_name,
+                f'{r.total_return_pct:+.2f}%',
+                f'{r.max_drawdown_pct:.2f}%',
+                str(r.total_trades),
+                f'{r.win_rate:.1f}%',
+                f'{r.sharpe_ratio:.2f}'
+            ])
+        
+        table = ax4.table(
+            cellText=table_data,
+            colLabels=['Strategy', 'Return', 'Max DD', 'Trades', 'Win Rate', 'Sharpe'],
+            loc='center',
+            cellLoc='center'
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1.2, 1.5)
+        ax4.set_title('Performance Summary', fontweight='bold', pad=20)
+        
+        plt.tight_layout()
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        chart_path = output_dir / f"strategy_compare_{self.coin}_{self.timeframe}_{timestamp}.png"
+        plt.savefig(chart_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"\n📈 Comparison chart saved to: {chart_path}")
+
     def generate_report(self, results: BacktestResults) -> None:
         """Generate and display backtest report."""
         print("\n" + "=" * 60)
@@ -757,24 +1194,27 @@ class BatchBacktester:
         ax3.set_title('Accuracy vs Return (color = Sharpe)', fontweight='bold')
         plt.colorbar(scatter, ax=ax3, label='Sharpe Ratio')
         
-        # Add labels for best/worst models
-        best_idx = df['accuracy'].idxmax()
-        worst_idx = df['accuracy'].idxmin()
-        for idx in [best_idx, worst_idx]:
-            ax3.annotate(df.loc[idx, 'model'], 
-                        (df.loc[idx, 'accuracy'], df.loc[idx, 'cumulative_return_pct']),
-                        fontsize=8, ha='left')
+        # Add labels for ALL models
+        for idx, row in df.iterrows():
+            ax3.annotate(row['model'], 
+                        (row['accuracy'], row['cumulative_return_pct']),
+                        fontsize=7, ha='left', va='bottom',
+                        xytext=(3, 3), textcoords='offset points',
+                        alpha=0.8)
         
-        # 4. Distribution histograms
+        # 4. Accuracy Distribution with model names
         ax4 = axes[1, 1]
-        ax4.hist(df['accuracy'], bins=15, alpha=0.7, color='#3498db', label='Accuracy', edgecolor='white')
+        # Create bar chart instead of histogram to show individual model names
+        df_sorted = df.sort_values('accuracy', ascending=True)
+        colors = ['#2ecc71' if acc > 50 else '#e74c3c' for acc in df_sorted['accuracy']]
+        ax4.barh(df_sorted['model'], df_sorted['accuracy'], color=colors, edgecolor='white', alpha=0.8)
         ax4.axvline(x=50, color='red', linestyle='--', linewidth=2, label='Random (50%)')
-        ax4.axvline(x=df['accuracy'].mean(), color='green', linestyle='--', linewidth=2, 
+        ax4.axvline(x=df['accuracy'].mean(), color='blue', linestyle='--', linewidth=2, 
                    label=f'Mean ({df["accuracy"].mean():.1f}%)')
         ax4.set_xlabel('Accuracy (%)')
-        ax4.set_ylabel('Number of Models')
-        ax4.set_title('Accuracy Distribution', fontweight='bold')
-        ax4.legend()
+        ax4.set_title('Model Accuracy Ranking', fontweight='bold')
+        ax4.legend(loc='lower right')
+        ax4.set_xlim(0, 100)
         
         plt.tight_layout()
         
@@ -832,6 +1272,20 @@ Examples:
         help='Generate individual charts for each model (slower)'
     )
     
+    parser.add_argument(
+        '--compare',
+        action='store_true',
+        help='Compare HODL, Grid, and Normal trading strategies (requires --coin and --timeframe)'
+    )
+    
+    parser.add_argument(
+        '--grid-levels',
+        type=int,
+        default=2,
+        choices=[2, 3, 4],
+        help='Grid levels for strategy comparison (default: 2)'
+    )
+    
     args = parser.parse_args()
     
     print("\n" + "=" * 60)
@@ -859,27 +1313,110 @@ Examples:
             months_back=args.months
         )
         
-        results = backtester.run_backtest()
-        
-        if results:
-            backtester.generate_report(results)
+        # Strategy comparison mode
+        if args.compare:
+            print("\n📊 Strategy Comparison Mode")
+            results = backtester.run_strategy_comparison()
+            if not results:
+                print("\n❌ Strategy comparison failed.")
+                sys.exit(1)
         else:
-            print("\n❌ Backtest failed. Check the errors above.")
-            sys.exit(1)
+            # Normal backtest
+            results = backtester.run_backtest()
+            
+            if results:
+                backtester.generate_report(results)
+            else:
+                print("\n❌ Backtest failed. Check the errors above.")
+                sys.exit(1)
     
     # Batch mode (all models or filtered)
     else:
-        batch_tester = BatchBacktester(
-            months_back=args.months,
-            coin_filter=args.coin,
-            timeframe_filter=args.timeframe
-        )
-        
-        results = batch_tester.run_all(generate_individual_charts=args.charts)
-        
-        if not results:
-            print("\n❌ No successful backtests.")
-            sys.exit(1)
+        # Batch compare mode - run strategy comparison for all models
+        if args.compare:
+            # Filter models
+            filtered_models = models
+            if args.coin:
+                filtered_models = [m for m in filtered_models if m['coin'] == args.coin.upper()]
+            if args.timeframe:
+                filtered_models = [m for m in filtered_models if m['timeframe'] == args.timeframe]
+            
+            if not filtered_models:
+                print("\n❌ No models found matching the criteria.")
+                sys.exit(1)
+            
+            print(f"\n📊 Batch Strategy Comparison Mode: {len(filtered_models)} models")
+            print("=" * 80)
+            
+            all_compare_results = []
+            
+            for idx, model_info in enumerate(filtered_models, 1):
+                coin = model_info['coin']
+                timeframe = model_info['timeframe']
+                
+                print(f"\n{'─' * 60}")
+                print(f"📊 [{idx}/{len(filtered_models)}] Comparing strategies for: {coin}/{timeframe}")
+                print(f"{'─' * 60}")
+                
+                try:
+                    backtester = Backtester(
+                        coin=coin,
+                        timeframe=timeframe,
+                        months_back=args.months,
+                        model_info=model_info
+                    )
+                    
+                    results = backtester.run_strategy_comparison()
+                    if results:
+                        # Find best strategy for this model
+                        best = max(results, key=lambda x: x.total_return_pct)
+                        all_compare_results.append({
+                            'coin': coin,
+                            'timeframe': timeframe,
+                            'best_strategy': best.strategy_name,
+                            'best_return': best.total_return_pct,
+                            'results': results
+                        })
+                except Exception as e:
+                    print(f"   ❌ Error: {e}")
+                    continue
+            
+            # Print consolidated summary
+            if all_compare_results:
+                print("\n" + "=" * 80)
+                print("📊 CONSOLIDATED STRATEGY COMPARISON SUMMARY")
+                print("=" * 80)
+                print(f"\n{'Model':<15} {'Best Strategy':<20} {'Return':<12}")
+                print("-" * 50)
+                
+                for r in sorted(all_compare_results, key=lambda x: x['best_return'], reverse=True):
+                    emoji = "🟢" if r['best_return'] > 0 else "🔴"
+                    print(f"{r['coin']}_{r['timeframe']:<10} {r['best_strategy']:<20} {emoji}{r['best_return']:>+8.2f}%")
+                
+                print("-" * 50)
+                
+                # Count best strategies
+                from collections import Counter
+                strategy_counts = Counter(r['best_strategy'] for r in all_compare_results)
+                print("\n🏆 En İyi Strateji Dağılımı:")
+                for strategy, count in strategy_counts.most_common():
+                    print(f"   {strategy}: {count} model")
+            else:
+                print("\n❌ No successful comparisons.")
+                sys.exit(1)
+        else:
+            # Normal batch backtest
+            batch_tester = BatchBacktester(
+                months_back=args.months,
+                coin_filter=args.coin,
+                timeframe_filter=args.timeframe
+            )
+            
+            results = batch_tester.run_all(generate_individual_charts=args.charts)
+            
+            if not results:
+                print("\n❌ No successful backtests.")
+                sys.exit(1)
 
 
 if __name__ == "__main__":

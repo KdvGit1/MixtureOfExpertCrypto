@@ -131,6 +131,30 @@ class BotConfig:
     daily_loss_limit_pct: float = -5.0  # Stop trading if daily loss exceeds -5%
     max_daily_trades: int = 20  # Maximum trades per day
     min_balance_usdt: float = 50.0  # Minimum balance to keep (don't trade below this)
+    
+    # Grid Trading (Spot only)
+    grid_enabled: bool = True           # Enable grid/DCA mode for spot
+    grid_levels: int = 2                # Number of grid levels (2-4)
+    
+    def get_grid_allocations(self) -> list:
+        """Get buy allocation percentages for each grid level (decreasing)."""
+        if self.grid_levels == 2:
+            return [0.60, 0.40]  # 60% + 40%
+        elif self.grid_levels == 3:
+            return [0.50, 0.30, 0.20]  # 50% + 30% + 20%
+        elif self.grid_levels == 4:
+            return [0.40, 0.30, 0.20, 0.10]  # 40% + 30% + 20% + 10%
+        return [1.0]  # Fallback: single buy
+    
+    def get_grid_sell_targets(self) -> list:
+        """Get sell target percentages for each grid level."""
+        if self.grid_levels == 2:
+            return [0.02, 0.04]  # +2%, +4%
+        elif self.grid_levels == 3:
+            return [0.015, 0.03, 0.05]  # +1.5%, +3%, +5%
+        elif self.grid_levels == 4:
+            return [0.01, 0.02, 0.035, 0.05]  # +1%, +2%, +3.5%, +5%
+        return [0.05]  # Fallback: single target
 
 
 # ============================================
@@ -257,6 +281,37 @@ class Position:
     entry_prediction: float = 0.0
     trade_id: Optional[str] = None  # Unique ID for tracking
     
+    # Grid trading fields (Spot only)
+    buy_grid_level: int = 0          # How many buy grids executed (0 = no position)
+    sell_grid_level: int = 0         # How many sell grids executed
+    grid_entries: list = None        # List of {price, amount, time} for each grid buy
+    total_invested: float = 0.0      # Total USDT invested across all grids
+    last_grid_time: Optional[datetime] = None  # Time of last grid action
+    
+    # Futures signal confirmation
+    opposite_signal_count: int = 0   # Count of consecutive opposite signals
+    
+    def __post_init__(self):
+        if self.grid_entries is None:
+            self.grid_entries = []
+    
+    def avg_entry_price(self) -> float:
+        """Calculate weighted average entry price from all grid entries."""
+        if not self.grid_entries:
+            return self.entry_price
+        total_value = sum(e['price'] * e['amount'] for e in self.grid_entries)
+        total_amount = sum(e['amount'] for e in self.grid_entries)
+        return total_value / total_amount if total_amount > 0 else 0.0
+    
+    def reset_grid(self):
+        """Reset all grid tracking when position is closed."""
+        self.buy_grid_level = 0
+        self.sell_grid_level = 0
+        self.grid_entries = []
+        self.total_invested = 0.0
+        self.last_grid_time = None
+        self.opposite_signal_count = 0  # Reset signal counter too
+    
     def pnl_pct(self, current_price: float) -> float:
         """Calculate P&L percentage."""
         if self.side == "FLAT" or self.entry_price == 0:
@@ -272,7 +327,7 @@ class TradeRecord:
     """Stores a completed trade for history."""
     trade_id: str
     coin: str
-    side: str  # "COMPLETE" or "SHORT_COMPLETE"
+    side: str  # "COMPLETE", "SHORT_COMPLETE", or "GRID_COMPLETE"
     entry_price: float
     exit_price: float
     amount: float
@@ -291,6 +346,10 @@ class TradeRecord:
     actual_move_pct: float = 0.0  # Actual price movement (exit-entry)/entry
     prediction_accuracy: float = 0.0  # How close prediction was to actual
     hold_duration_minutes: int = 0  # How long position was held
+    # Grid trading fields
+    is_grid: bool = False           # Was this a grid trade?
+    grid_buy_levels: int = 0        # How many buy grids were executed
+    grid_sell_levels: int = 0       # How many sell grids were executed
 
 
 class TradeHistory:
@@ -642,6 +701,16 @@ Komutlar: /help
 /config futures sl -20 - Futures SL %-20
 /config futures tp 20 - Futures TP %20
 
+━━━━━━━━━━━━━━━━━━━━━━
+<b>📊 GRID TRADING (Spot)</b>
+━━━━━━━━━━━━━━━━━━━━━━
+/grid - Grid durumunu göster
+/grid 2 - 2 kademe ayarla
+/grid 3 - 3 kademe ayarla
+/grid 4 - 4 kademe ayarla
+/grid off - Grid kapatır (tek sefer al/sat)
+/grid on - Grid açar
+
 <b>Diğer:</b>
 /config confidence 30 - Güven eşiği %30
 
@@ -654,6 +723,7 @@ Komutlar: /help
 • Günlük kayıp limiti koruması
 • Trade geçmişi kaydı
 • Anlık Telegram bildirimleri
+• Grid/DCA kademeli alım-satım (Spot)
 """
         await update.message.reply_text(msg.strip(), parse_mode='HTML')
     
@@ -1031,7 +1101,8 @@ Gerçek işlem için:
             trades_text = ""
             for trade in reversed(recent):  # Most recent first
                 emoji = "🟢" if trade.pnl_pct >= 0 else "🔴"
-                trades_text += f"  {emoji} {trade.coin}: {trade.pnl_pct:+.2f}% (${trade.pnl_usdt:+.2f})\n"
+                grid_tag = " [GRID]" if getattr(trade, 'is_grid', False) else ""
+                trades_text += f"  {emoji} {trade.coin}{grid_tag}: {trade.pnl_pct:+.2f}% (${trade.pnl_usdt:+.2f})\n"
         else:
             trades_text = "  Henüz trade yok\n"
         
@@ -1399,6 +1470,100 @@ Onaylamak için yazın:
             return
         
         await update.message.reply_text("❌ Geçersiz parametre. /config yazarak kullanımı görün.")
+    
+    async def cmd_grid(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /grid command - Configure grid trading for spot mode."""
+        args = context.args
+        
+        # No args - show grid status
+        if not args:
+            enabled_text = "✅ Aktif" if self.config.grid_enabled else "❌ Kapalı"
+            mode_warning = "" if self.config.trading_mode == 'spot' else "\n\n⚠️ Grid trading sadece SPOT modda çalışır!"
+            
+            # Get allocations and targets
+            allocations = self.config.get_grid_allocations()
+            targets = self.config.get_grid_sell_targets()
+            
+            alloc_str = " + ".join([f"%{int(a*100)}" for a in allocations])
+            target_str = " / ".join([f"+{t*100:.1f}%" for t in targets])
+            
+            # Show open grid positions
+            grid_positions = []
+            for coin, pos in self.positions.items():
+                if pos.side == "LONG" and pos.buy_grid_level > 0:
+                    grid_positions.append(f"  • {coin}: Alış {pos.buy_grid_level}/{self.config.grid_levels}, Satış {pos.sell_grid_level}/{self.config.grid_levels}")
+            
+            grid_pos_text = "\n".join(grid_positions) if grid_positions else "  (Grid pozisyon yok)"
+            
+            msg = f"""
+📊 <b>Grid Trading Ayarları</b>
+
+• Durum: {enabled_text}
+• Kademe: {self.config.grid_levels}
+• Dağılım: {alloc_str}
+• Hedefler: {target_str}
+
+<b>Açık Grid Pozisyonları:</b>
+{grid_pos_text}
+{mode_warning}
+
+<b>⚠️ Not:</b> Grid modunda spot_tp_pct kullanılmaz.
+Satış hedefleri grid tarafından belirlenir.
+Stop-loss (SL) hala aktif: {self.config.spot_sl_pct:.0f}%
+
+<b>Komutlar:</b>
+/grid 2 - 2 kademe
+/grid 3 - 3 kademe
+/grid 4 - 4 kademe
+/grid on - Aç
+/grid off - Kapat
+"""
+            await update.message.reply_text(msg.strip(), parse_mode='HTML')
+            return
+        
+        action = args[0].lower()
+        
+        # Enable/disable
+        if action == 'on':
+            self.config.grid_enabled = True
+            msg = f"""✅ Grid trading AKTİF edildi.
+
+Spot modda kademeli alım-satım yapılacak.
+
+⚠️ <b>Önemli:</b>
+• spot_tp_pct ({self.config.spot_tp_pct:+.0f}%) artık kullanılmıyor
+• Satış hedefleri: {' / '.join([f'+{t*100:.1f}%' for t in self.config.get_grid_sell_targets()])}
+• Stop-loss hala aktif: {self.config.spot_sl_pct:.0f}%
+"""
+            await update.message.reply_text(msg.strip(), parse_mode='HTML')
+            return
+        
+        if action == 'off':
+            self.config.grid_enabled = False
+            await update.message.reply_text("❌ Grid trading KAPANDI.\n\nTek seferde al/sat moduna geçildi.")
+            return
+        
+        # Set grid levels
+        try:
+            levels = int(action)
+            if 2 <= levels <= 4:
+                old_val = self.config.grid_levels
+                self.config.grid_levels = levels
+                
+                allocations = self.config.get_grid_allocations()
+                targets = self.config.get_grid_sell_targets()
+                alloc_str = " + ".join([f"%{int(a*100)}" for a in allocations])
+                target_str = " / ".join([f"+{t*100:.1f}%" for t in targets])
+                
+                await update.message.reply_text(
+                    f"✅ Grid kademesi: {old_val} → {levels}\n\n"
+                    f"📊 Alış Dağılımı: {alloc_str}\n"
+                    f"🎯 Satış Hedefleri: {target_str}"
+                )
+            else:
+                await update.message.reply_text("⚠️ Kademe 2-4 arasında olmalı.")
+        except ValueError:
+            await update.message.reply_text("❌ Geçersiz komut. /grid yazarak kullanımı görün.")
     
     async def cmd_close(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /close command - Close positions manually via Telegram."""
@@ -1981,13 +2146,14 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
     # ========== TRADING LOGIC ==========
     
     def should_trade(self, coin: str, prediction: Dict) -> Tuple[str, str]:
-        """Decide whether to trade."""
+        """Decide whether to trade. Supports grid trading for spot mode."""
         pred = prediction['prediction']
         confidence = prediction['confidence']
         price = prediction['price']
         threshold = self.config.prediction_threshold
         pos = self.positions[coin]
         is_futures = self.config.trading_mode == 'futures'
+        is_spot_grid = not is_futures and self.config.grid_enabled
         
         # Check confidence threshold first
         if confidence < self.config.min_confidence_threshold:
@@ -2004,7 +2170,43 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             sl_limit = self.config.spot_sl_pct / 100     # e.g. -5% -> -0.05
             tp_max = self.config.spot_tp_pct / 100       # e.g. +5% -> +0.05
 
-        # CLOSE LONG logic
+        # ========== SPOT GRID MODE ==========
+        if is_spot_grid and pos.side == "LONG":
+            # Use average entry price for grid positions
+            avg_price = pos.avg_entry_price() if pos.grid_entries else pos.entry_price
+            current_pnl = ((price - avg_price) / avg_price) if avg_price > 0 else 0
+            
+            # Stop-loss: sell everything immediately
+            if current_pnl <= sl_limit:
+                return ('SELL_ALL', f'🛑 Stop-Loss: {current_pnl*100:.2f}%')
+            
+            # Check grid sell targets
+            sell_targets = self.config.get_grid_sell_targets()
+            if pos.sell_grid_level < len(sell_targets):
+                target = sell_targets[pos.sell_grid_level]
+                if current_pnl >= target:
+                    return ('GRID_SELL', f'🎯 Grid Hedef {pos.sell_grid_level+1}: {current_pnl*100:+.2f}%')
+            
+            # Check if we can add more grid buys
+            max_grids = self.config.grid_levels
+            if pos.buy_grid_level < max_grids and pred > threshold:
+                # Add condition: price dropped from average OR enough time passed
+                price_drop = (avg_price - price) / avg_price if avg_price > 0 else 0
+                time_since_last = None
+                if pos.last_grid_time:
+                    time_since_last = (datetime.now() - pos.last_grid_time).total_seconds() / 60
+                
+                # Add to position if: price dropped 1%+ OR 30+ minutes since last grid
+                if price_drop >= 0.01 or (time_since_last and time_since_last >= 30):
+                    return ('GRID_BUY', f'📈 Grid Ekleme {pos.buy_grid_level+1}/{max_grids}: +{pred*100:.3f}%')
+            
+            # Still bullish, waiting
+            if pred > threshold:
+                return ('HOLD', 'Hala yükseliş - grid bekleniyor')
+            
+            return ('HOLD', 'Bekleniyor')
+
+        # ========== STANDARD LONG CLOSE LOGIC (Futures or non-grid Spot) ==========
         if pos.side == "LONG":
             current_pnl = pos.pnl_pct(price) / 100  # Convert to decimal
             if is_futures:
@@ -2023,15 +2225,26 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             
             # Bearish + min profit
             if pred < 0 and current_pnl >= self.config.min_profit_to_exit:
+                pos.opposite_signal_count = 0  # Reset on exit
                 return ('SELL', f'📉 Bearish + kâr: {current_pnl*100:+.2f}%')
             
-            # Still bullish
+            # FUTURES: Track opposite signals for confirmation
+            if is_futures and pred < -threshold and current_pnl < 0:
+                pos.opposite_signal_count += 1
+                if pos.opposite_signal_count >= 2:
+                    pos.opposite_signal_count = 0  # Reset on exit
+                    return ('SELL', f'⚠️ 2x ters sinyal çıkış: {current_pnl*100:+.2f}%')
+                else:
+                    return ('HOLD', f'⚠️ Ters sinyal 1/2 - doğrulama bekleniyor')
+            
+            # Still bullish - reset opposite counter
             if pred > threshold:
+                pos.opposite_signal_count = 0
                 return ('HOLD', 'Hala yükseliş sinyali')
             
             return ('HOLD', 'Bekleniyor')
         
-        # CLOSE SHORT logic (futures only)
+        # ========== CLOSE SHORT LOGIC (Futures only) ==========
         if pos.side == "SHORT" and is_futures:
             # For SHORT: pnl_pct() already returns positive for profit (price down)
             current_pnl = pos.pnl_pct(price) / 100  # pnl_pct() handles SHORT correctly
@@ -2050,21 +2263,34 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             
             # Bullish + min profit (close short when market turns bullish)
             if pred > 0 and current_pnl >= self.config.min_profit_to_exit:
+                pos.opposite_signal_count = 0  # Reset on exit
                 return ('CLOSE_SHORT', f'📈 Bullish + kâr: {current_pnl*100:+.2f}%')
             
-            # Still bearish
+            # Track opposite signals for confirmation (bullish when SHORT)
+            if pred > threshold and current_pnl < 0:
+                pos.opposite_signal_count += 1
+                if pos.opposite_signal_count >= 2:
+                    pos.opposite_signal_count = 0  # Reset on exit
+                    return ('CLOSE_SHORT', f'⚠️ 2x ters sinyal çıkış: {current_pnl*100:+.2f}%')
+                else:
+                    return ('HOLD', f'⚠️ Ters sinyal 1/2 - doğrulama bekleniyor')
+            
+            # Still bearish - reset opposite counter
             if pred < -threshold:
+                pos.opposite_signal_count = 0
                 return ('HOLD', 'Hala düşüş sinyali')
             
             return ('HOLD', 'Bekleniyor')
         
-        # OPEN NEW POSITION logic
+        # ========== OPEN NEW POSITION ==========
         if pos.side == "FLAT":
             if open_count >= self.config.max_positions:
                 return ('HOLD', 'Max pozisyon limiti')
             
             # LONG signal (positive prediction)
             if pred > threshold:
+                if is_spot_grid:
+                    return ('GRID_BUY', f'📈 Grid Başlat 1/{self.config.grid_levels}: +{pred*100:.3f}%')
                 return ('BUY', f'📈 Yükseliş: +{pred*100:.3f}%')
             
             # SHORT signal (negative prediction, futures only)
@@ -2235,6 +2461,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             pos.entry_time = None
             pos.entry_prediction = 0.0
             pos.trade_id = None
+            pos.reset_grid()  # Clean up grid fields too
             
             return True
             
@@ -2242,6 +2469,369 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.error(f"Sell error for {coin}: {e}")
             return False
     
+    async def execute_grid_buy(self, coin: str, total_position_usdt: float, prediction: Dict) -> bool:
+        """Execute grid buy order (spot only). Used for both initial and add-on buys."""
+        try:
+            pos = self.positions[coin]
+            symbol = f"{coin}/USDT"
+            
+            price = self.get_current_price(f"{coin}/USDT")
+            if price is None:
+                return False
+            
+            # Determine which grid level we're buying
+            current_level = pos.buy_grid_level
+            allocations = self.config.get_grid_allocations()
+            max_levels = len(allocations)
+            
+            if current_level >= max_levels:
+                self.logger.warning(f"{coin}: All grid levels already filled")
+                return False
+            
+            # Calculate amount for this grid level
+            grid_pct = allocations[current_level]
+            usdt_for_this_grid = total_position_usdt * grid_pct
+            
+            fee_rate = self.config.bnb_fee_rate if self.config.use_bnb_for_fees else self.config.base_fee_rate
+            fee = usdt_for_this_grid * fee_rate
+            net_usdt = usdt_for_this_grid - fee
+            amount = net_usdt / price
+            
+            # Round
+            amount = float(Decimal(str(amount)).quantize(Decimal('0.000001'), rounding=ROUND_DOWN))
+            
+            self.logger.info(f"📈 GRID BUY {coin} [{current_level+1}/{max_levels}]: {amount:.6f} @ ${price:,.5f}")
+            
+            if not self.config.dry_run:
+                self.exchange.create_market_buy_order(symbol, amount)
+            
+            # Update position
+            is_first_buy = pos.side == "FLAT"
+            
+            pos.side = "LONG"
+            pos.amount += amount
+            pos.total_invested += usdt_for_this_grid
+            pos.buy_grid_level = current_level + 1
+            pos.last_grid_time = datetime.now()
+            
+            # Add to grid entries for average calculation
+            pos.grid_entries.append({
+                'price': price,
+                'amount': amount,
+                'time': datetime.now().isoformat(),
+                'usdt': usdt_for_this_grid
+            })
+            
+            # Update entry price to weighted average
+            pos.entry_price = pos.avg_entry_price()
+            
+            if is_first_buy:
+                pos.entry_time = datetime.now()
+                pos.entry_prediction = prediction['prediction'] * self.config.prediction_scale
+                pos.trade_id = str(uuid.uuid4())[:8]
+                
+                # Store pending trade info
+                self.pending_trades[coin] = {
+                    'trade_id': pos.trade_id,
+                    'entry_time': pos.entry_time.isoformat(),
+                    'ai_prediction': prediction['prediction_pct'],
+                    'ai_confidence': prediction['confidence']
+                }
+            
+            self.daily_trades += 1
+            self.total_trades += 1
+            
+            # Send grid buy notification
+            await self.send_grid_buy_alert(
+                coin=coin,
+                price=price,
+                amount=amount,
+                usdt_amount=usdt_for_this_grid,
+                grid_level=current_level + 1,
+                max_levels=max_levels,
+                prediction_pct=prediction['prediction_pct'],
+                confidence=prediction['confidence']
+            )
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Grid buy error for {coin}: {e}")
+            return False
+    
+    async def execute_grid_sell(self, coin: str, reason: str) -> bool:
+        """Execute partial grid sell (spot only). Sells portion based on current sell level."""
+        try:
+            pos = self.positions[coin]
+            if pos.side != "LONG":
+                return False
+            
+            symbol = f"{coin}/USDT"
+            price = self.get_current_price(f"{coin}/USDT")
+            if price is None:
+                return False
+            
+            # Determine sell portion based on grid level
+            allocations = self.config.get_grid_allocations()
+            current_sell_level = pos.sell_grid_level
+            max_levels = len(allocations)
+            
+            if current_sell_level >= max_levels:
+                # All grids sold, shouldn't happen
+                return await self.execute_sell_all(coin, reason)
+            
+            # Sell the corresponding allocation percentage
+            sell_pct = allocations[current_sell_level]
+            sell_amount = pos.amount * sell_pct
+            
+            # Round
+            sell_amount = float(Decimal(str(sell_amount)).quantize(Decimal('0.000001'), rounding=ROUND_DOWN))
+            
+            # Calculate P&L based on average entry
+            avg_entry = pos.avg_entry_price()
+            pnl_pct = ((price - avg_entry) / avg_entry) * 100 if avg_entry > 0 else 0
+            pnl_usdt = (price - avg_entry) * sell_amount
+            
+            self.logger.info(f"📉 GRID SELL {coin} [{current_sell_level+1}/{max_levels}]: {sell_amount:.6f} @ ${price:,.5f} ({pnl_pct:+.2f}%)")
+            
+            if not self.config.dry_run:
+                self.exchange.create_market_sell_order(symbol, sell_amount)
+            
+            # Update position
+            pos.amount -= sell_amount
+            pos.sell_grid_level = current_sell_level + 1
+            pos.last_grid_time = datetime.now()
+            
+            # Update stats (partial P&L)
+            self.cumulative_pnl_pct += pnl_pct * sell_pct  # Weighted by portion sold
+            self.daily_pnl_pct += pnl_pct * sell_pct
+            self.daily_trades += 1
+            self.total_trades += 1
+            
+            # Send grid sell notification
+            await self.send_grid_sell_alert(
+                coin=coin,
+                price=price,
+                sell_amount=sell_amount,
+                avg_entry=avg_entry,
+                pnl_pct=pnl_pct,
+                pnl_usdt=pnl_usdt,
+                grid_level=current_sell_level + 1,
+                max_levels=max_levels,
+                remaining_amount=pos.amount,
+                reason=reason
+            )
+            
+            # Check if all grids sold
+            if pos.sell_grid_level >= max_levels or pos.amount < 0.000001:
+                # Position fully closed
+                self._finalize_grid_position(coin, price)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Grid sell error for {coin}: {e}")
+            return False
+    
+    async def execute_sell_all(self, coin: str, reason: str) -> bool:
+        """Execute full position sell (stop-loss or final exit). Used in grid mode for emergencies."""
+        try:
+            pos = self.positions[coin]
+            if pos.side != "LONG" or pos.amount < 0.000001:
+                return False
+            
+            symbol = f"{coin}/USDT"
+            price = self.get_current_price(f"{coin}/USDT")
+            if price is None:
+                return False
+            
+            amount = pos.amount
+            avg_entry = pos.avg_entry_price() if pos.grid_entries else pos.entry_price
+            pnl_pct = ((price - avg_entry) / avg_entry) * 100 if avg_entry > 0 else 0
+            pnl_usdt = (price - avg_entry) * amount
+            
+            self.logger.info(f"📉 SELL ALL {coin}: {amount:.6f} @ ${price:,.5f} ({pnl_pct:+.2f}%)")
+            
+            if not self.config.dry_run:
+                self.exchange.create_market_sell_order(symbol, amount)
+            
+            # Update stats
+            self.cumulative_pnl_pct += pnl_pct
+            self.daily_pnl_pct += pnl_pct
+            self.daily_trades += 1
+            self.total_trades += 1
+            
+            # Send notification
+            await self.send_sell_all_alert(coin, price, amount, avg_entry, pnl_pct, pnl_usdt, reason)
+            
+            # Finalize position
+            self._finalize_grid_position(coin, price)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Sell all error for {coin}: {e}")
+            return False
+    
+    def _finalize_grid_position(self, coin: str, exit_price: float):
+        """Clean up position after grid trading completes."""
+        pos = self.positions[coin]
+        pending = self.pending_trades.get(coin, {})
+        
+        # Calculate final metrics
+        avg_entry = pos.avg_entry_price() if pos.grid_entries else pos.entry_price
+        final_pnl_pct = ((exit_price - avg_entry) / avg_entry) * 100 if avg_entry > 0 else 0
+        
+        # Save to trade history
+        hold_duration = 0
+        if pos.entry_time:
+            hold_duration = int((datetime.now() - pos.entry_time).total_seconds() / 60)
+        
+        trade_record = TradeRecord(
+            trade_id=pending.get('trade_id', pos.trade_id or str(uuid.uuid4())[:8]),
+            coin=coin,
+            side="GRID_COMPLETE",
+            entry_price=avg_entry,
+            exit_price=exit_price,
+            amount=sum(e['amount'] for e in pos.grid_entries) if pos.grid_entries else pos.amount,
+            entry_time=pending.get('entry_time', pos.entry_time.isoformat() if pos.entry_time else ''),
+            exit_time=datetime.now().isoformat(),
+            pnl_pct=final_pnl_pct,
+            pnl_usdt=pos.total_invested * (final_pnl_pct / 100),
+            reason=f"Grid {pos.sell_grid_level}/{self.config.grid_levels}",
+            ai_prediction=pending.get('ai_prediction', pos.entry_prediction * 100),
+            ai_confidence=pending.get('ai_confidence', 0),
+            trading_mode='spot',
+            leverage=1,
+            is_dry_run=self.config.dry_run,
+            timeframe=self.config.default_timeframe,
+            actual_move_pct=final_pnl_pct,
+            prediction_accuracy=100 - min(100, abs(pending.get('ai_prediction', 0) - final_pnl_pct)),
+            hold_duration_minutes=hold_duration,
+            is_grid=True,
+            grid_buy_levels=pos.buy_grid_level,
+            grid_sell_levels=pos.sell_grid_level
+        )
+        self.trade_history.add_trade(trade_record)
+        
+        # Clear pending
+        if coin in self.pending_trades:
+            del self.pending_trades[coin]
+        
+        # Reset position including grid fields
+        pos.side = "FLAT"
+        pos.entry_price = 0.0
+        pos.amount = 0.0
+        pos.entry_time = None
+        pos.entry_prediction = 0.0
+        pos.trade_id = None
+        pos.reset_grid()
+    
+    async def send_grid_buy_alert(self, coin: str, price: float, amount: float, usdt_amount: float,
+                                   grid_level: int, max_levels: int, prediction_pct: float, confidence: float):
+        """Send grid buy notification with targets."""
+        pos = self.positions[coin]
+        avg_price = pos.avg_entry_price()
+        total_invested = pos.total_invested
+        
+        # Build grid progress bar
+        filled = "■" * grid_level
+        empty = "□" * (max_levels - grid_level)
+        
+        # Calculate targets
+        sell_targets = self.config.get_grid_sell_targets()
+        targets_str = ""
+        for i, target in enumerate(sell_targets):
+            target_price = avg_price * (1 + target)
+            potential_profit = total_invested * target
+            marker = "→" if i == 0 else " "
+            targets_str += f"\n• Kademe {i+1}: ${target_price:,.2f} ({target*100:+.1f}%) {marker} +${potential_profit:.2f}"
+        
+        msg = f"""
+🟢 <b>{coin} ALIŞ (Kademe {grid_level}/{max_levels})</b>
+
+📊 <b>Bu Kademe:</b>
+• Miktar: {amount:.6f} {coin}
+• Değer: ${usdt_amount:,.2f}
+• Fiyat: ${price:,.5f}
+• AI: {prediction_pct:+.2f}% (güven: {confidence:.0f}%)
+
+📈 <b>Toplam Pozisyon:</b>
+• Ortalama: ${avg_price:,.5f}
+• Yatırım: ${total_invested:,.2f}
+• Grid: {grid_level}/{max_levels} {filled}{empty}
+
+🎯 <b>Hedefler:</b>{targets_str}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+        await self.send_notification(msg.strip())
+    
+    async def send_grid_sell_alert(self, coin: str, price: float, sell_amount: float, avg_entry: float,
+                                    pnl_pct: float, pnl_usdt: float, grid_level: int, max_levels: int,
+                                    remaining_amount: float, reason: str):
+        """Send grid sell notification."""
+        emoji = "🟢" if pnl_pct >= 0 else "🔴"
+        
+        # Build grid progress (inverted for sells)
+        sold = "□" * grid_level
+        remaining = "■" * (max_levels - grid_level)
+        
+        # Next target info
+        next_targets = ""
+        if grid_level < max_levels:
+            sell_targets = self.config.get_grid_sell_targets()
+            pos = self.positions[coin]
+            if grid_level < len(sell_targets):
+                next_target = sell_targets[grid_level]
+                next_price = avg_entry * (1 + next_target)
+                next_targets = f"\n\n🎯 <b>Sonraki Hedef:</b>\n• Kademe {grid_level+1}: ${next_price:,.2f} ({next_target*100:+.1f}%)"
+        
+        remaining_value = remaining_amount * price
+        
+        msg = f"""
+{emoji} <b>{coin} SATIŞ (Kademe {grid_level}/{max_levels})</b>
+
+📊 <b>Bu Kademe:</b>
+• Miktar: {sell_amount:.6f} {coin}
+• Satış: ${price:,.5f}
+• P&L: {pnl_pct:+.2f}% (${pnl_usdt:+.2f})
+
+📝 Sebep: {reason}
+
+📉 <b>Kalan Pozisyon:</b>
+• Miktar: {remaining_amount:.6f} {coin}
+• Değer: ${remaining_value:,.2f}
+• Grid: {grid_level}/{max_levels} {sold}{remaining}{next_targets}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+        await self.send_notification(msg.strip())
+    
+    async def send_sell_all_alert(self, coin: str, price: float, amount: float, avg_entry: float,
+                                   pnl_pct: float, pnl_usdt: float, reason: str):
+        """Send full position close notification."""
+        emoji = "🟢" if pnl_pct >= 0 else "🔴"
+        
+        msg = f"""
+{emoji} <b>{coin} TAM SATIŞ</b>
+
+📊 <b>İşlem:</b>
+• Miktar: {amount:.6f} {coin}
+• Giriş Ort: ${avg_entry:,.5f}
+• Çıkış: ${price:,.5f}
+
+{emoji} <b>P&L:</b> {pnl_pct:+.2f}% (${pnl_usdt:+.2f})
+📝 Sebep: {reason}
+
+📈 <b>Toplam:</b>
+• Trade: {self.total_trades}
+• Kümülatif: {self.cumulative_pnl_pct:+.2f}%
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+        await self.send_notification(msg.strip())
+
     async def execute_short(self, coin: str, usdt_amount: float, prediction: Dict) -> bool:
         """Execute short order (futures only)."""
         try:
@@ -2428,6 +3018,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             pos.entry_time = None
             pos.entry_prediction = 0.0
             pos.trade_id = None
+            pos.reset_grid()  # Clean up grid fields for consistency
             
             return True
             
@@ -2526,8 +3117,8 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         self.logger.info(f"   → {action}: {reason}")
                         
                         if action == 'BUY':
-                            open_count = sum(1 for p in self.positions.values() if p.side in ["LONG", "SHORT"])
-                            trade_amount = (usdt_balance / (self.config.max_positions - open_count)) * self.config.position_pct
+                            # Position size: (total_balance * position_pct) / max_positions
+                            trade_amount = (usdt_balance * self.config.position_pct) / self.config.max_positions
                             
                             if trade_amount > 5:
                                 success = await self.execute_buy(coin, trade_amount, prediction)
@@ -2537,14 +3128,36 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                                 self.logger.warning(f"   ⚠️ {coin}: Yetersiz bakiye (${trade_amount:.2f} < $5)")
                                 await self.send_notification(f"[UYARI] {coin} BUY yapilamadi - yetersiz bakiye (${trade_amount:.2f} altinda $5)")
                         
+                        elif action == 'GRID_BUY':
+                            # Grid buy: total position allocation for this coin
+                            total_position_usdt = (usdt_balance * self.config.position_pct) / self.config.max_positions
+                            
+                            if total_position_usdt > 5:
+                                success = await self.execute_grid_buy(coin, total_position_usdt, prediction)
+                                if not success:
+                                    await self.send_notification(f"[HATA] {coin} GRID BUY basarisiz - exchange hatasi")
+                            else:
+                                self.logger.warning(f"   ⚠️ {coin}: Yetersiz bakiye (${total_position_usdt:.2f} < $5)")
+                                await self.send_notification(f"[UYARI] {coin} GRID BUY yapilamadi - yetersiz bakiye (${total_position_usdt:.2f} altinda $5)")
+                        
+                        elif action == 'GRID_SELL':
+                            success = await self.execute_grid_sell(coin, reason)
+                            if not success:
+                                await self.send_notification(f"[HATA] {coin} GRID SELL basarisiz - exchange hatasi")
+                        
+                        elif action == 'SELL_ALL':
+                            success = await self.execute_sell_all(coin, reason)
+                            if not success:
+                                await self.send_notification(f"[HATA] {coin} SELL ALL basarisiz - exchange hatasi")
+                        
                         elif action == 'SELL':
                             success = await self.execute_sell(coin, reason)
                             if not success:
                                 await self.send_notification(f"[HATA] {coin} SELL basarisiz - exchange hatasi")
                         
                         elif action == 'SHORT':
-                            open_count = sum(1 for p in self.positions.values() if p.side in ["LONG", "SHORT"])
-                            trade_amount = (usdt_balance / (self.config.max_positions - open_count)) * self.config.position_pct
+                            # Position size: (total_balance * position_pct) / max_positions
+                            trade_amount = (usdt_balance * self.config.position_pct) / self.config.max_positions
                             
                             if trade_amount > 5:
                                 success = await self.execute_short(coin, trade_amount, prediction)
@@ -2604,6 +3217,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         self.telegram_app.add_handler(CommandHandler("real", self.cmd_real))
         self.telegram_app.add_handler(CommandHandler("dryrun", self.cmd_dryrun))
         self.telegram_app.add_handler(CommandHandler("config", self.cmd_config))
+        self.telegram_app.add_handler(CommandHandler("grid", self.cmd_grid))
         self.telegram_app.add_handler(CommandHandler("close", self.cmd_close))
         self.telegram_app.add_handler(CommandHandler("sync", self.cmd_sync))
         
