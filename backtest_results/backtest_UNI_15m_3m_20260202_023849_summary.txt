@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: UNI / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4201
+Accuracy: 50.49%
+Avg Prediction: 8.6932%
+Avg Actual Return: -0.0040%
+Cumulative Return: -18.62%
+Max Drawdown: 59.26%
+Sharpe Ratio: -0.75
+Profit Factor: 0.99

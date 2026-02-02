@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: XRP / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4325
+Accuracy: 51.98%
+Avg Prediction: -4.7764%
+Avg Actual Return: -0.0039%
+Cumulative Return: 1.92%
+Max Drawdown: 37.24%
+Sharpe Ratio: 0.12
+Profit Factor: 1.00

@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: ETH / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4373
+Accuracy: 52.56%
+Avg Prediction: 6.3180%
+Avg Actual Return: -0.0047%
+Cumulative Return: 9.13%
+Max Drawdown: 21.23%
+Sharpe Ratio: 0.58
+Profit Factor: 1.01
