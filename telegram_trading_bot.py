@@ -2033,8 +2033,8 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         
         # CLOSE SHORT logic (futures only)
         if pos.side == "SHORT" and is_futures:
-            # For SHORT: profit when price goes down
-            current_pnl = -pos.pnl_pct(price) / 100  # Invert for SHORT
+            # For SHORT: pnl_pct() already returns positive for profit (price down)
+            current_pnl = pos.pnl_pct(price) / 100  # pnl_pct() handles SHORT correctly
             current_pnl *= self.config.leverage  # Apply leverage
             
             # Stop-loss (uses same dynamic limit)
