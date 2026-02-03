@@ -1,0 +1,35 @@
+[Unit]
+Description=Crypto Trading Bot for %i
+Documentation=https://github.com/yourusername/MixtureOfExpertCrypto
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/MixtureOfExpertCrypto
+
+# Use the virtual environment Python
+ExecStart=/home/pi/venv/bin/python run_user.py %i
+
+# Restart configuration
+Restart=always
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bot-%i
+
+# Resource limits (Raspberry Pi friendly)
+MemoryMax=1G
+CPUQuota=50%
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

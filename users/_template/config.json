@@ -1,0 +1,50 @@
+{
+  "username": "KULLANICI_ADI",
+  
+  "_comment_api": "=== BINANCE API AYARLARI ===",
+  "binance_api_key": "TESTNET_API_KEY_BURAYA",
+  "binance_api_secret": "TESTNET_API_SECRET_BURAYA",
+  "real_api_key": "MAINNET_API_KEY_BURAYA",
+  "real_api_secret": "MAINNET_API_SECRET_BURAYA",
+  
+  "_comment_telegram": "=== TELEGRAM AYARLARI ===",
+  "telegram_bot_token": "BOTFATHER_TOKEN_BURAYA",
+  "telegram_chat_id": "CHAT_ID_BURAYA",
+  
+  "_comment_coins": "=== TRADE EDİLECEK COİNLER ===",
+  "coins_to_trade": ["BTC", "ETH", "SOL"],
+  "default_timeframe": "15m",
+  
+  "_comment_mode": "=== TRADING MODU ===",
+  "trading_mode": "spot",
+  "leverage": 5,
+  "testnet": true,
+  "dry_run": true,
+  
+  "_comment_position": "=== POZİSYON AYARLARI ===",
+  "position_pct": 0.40,
+  "max_positions": 3,
+  "prediction_threshold": 0.003,
+  "prediction_scale": 0.5,
+  "min_profit_to_exit": 0.0025,
+  "min_confidence_threshold": 25.0,
+  
+  "_comment_sltp": "=== STOP LOSS / TAKE PROFIT ===",
+  "spot_sl_pct": -5.0,
+  "spot_tp_pct": 5.0,
+  "futures_sl_pct": -20.0,
+  "futures_tp_pct": 20.0,
+  
+  "_comment_safety": "=== GÜVENLİK LİMİTLERİ ===",
+  "daily_loss_limit_pct": -25.0,
+  "max_daily_trades": 50,
+  "min_balance_usdt": 5.0,
+  
+  "_comment_grid": "=== GRID TRADING (Spot) ===",
+  "grid_enabled": true,
+  "grid_levels": 2,
+  
+  "_comment_pi": "=== RASPBERRY PI OPTİMİZASYON ===",
+  "max_loaded_models": 5,
+  "loop_interval_seconds": 60
+}

@@ -161,12 +161,28 @@ class BotConfig:
 # LOGGING
 # ============================================
 
-def setup_logging() -> logging.Logger:
-    """Configure logging."""
-    log_dir = PROJECT_ROOT / "bot_logs"
-    log_dir.mkdir(exist_ok=True)
+def setup_logging(log_dir: Path = None) -> logging.Logger:
+    """Configure logging.
     
-    log_file = log_dir / f"telegram_bot_{datetime.now().strftime('%Y%m%d')}.log"
+    Args:
+        log_dir: Optional custom log directory. If None, uses BOT_LOG_DIR env var or default.
+    """
+    # Support multi-user: check for user-specific log directory
+    if log_dir is None:
+        user_log_dir = os.environ.get('BOT_LOG_DIR')
+        if user_log_dir:
+            log_dir = Path(user_log_dir)
+        else:
+            log_dir = PROJECT_ROOT / "bot_logs"
+    
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Include username in log file if available
+    username = os.environ.get('BOT_USERNAME', '')
+    if username:
+        log_file = log_dir / f"bot_{username}_{datetime.now().strftime('%Y%m%d')}.log"
+    else:
+        log_file = log_dir / f"telegram_bot_{datetime.now().strftime('%Y%m%d')}.log"
     
     logging.basicConfig(
         level=logging.INFO,
@@ -464,8 +480,14 @@ class TelegramAutoTradingBot:
         self.total_trades: int = 0
         self.daily_trades: int = 0
         
-        # Trade history
-        history_file = PROJECT_ROOT / "trade_history" / "trades.json"
+        # Trade history - support multi-user directories
+        user_history_dir = os.environ.get('BOT_HISTORY_DIR')
+        if user_history_dir:
+            history_dir = Path(user_history_dir)
+        else:
+            history_dir = PROJECT_ROOT / "trade_history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        history_file = history_dir / "trades.json"
         self.trade_history = TradeHistory(history_file)
         
         # Control
