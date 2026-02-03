@@ -67,6 +67,33 @@ Bu script şunları soracak:
 - Trade edilecek coinler
 - Risk ayarları
 
+### 📁 Kullanıcılar Nereye Kaydedilir?
+
+Her kullanıcı `users/` klasörüne kaydedilir:
+
+```
+users/
+├── kaan/
+│   └── config.json    ← Kaan'ın tüm ayarları burada
+├── ali/
+│   └── config.json
+└── mehmet/
+    └── config.json
+```
+
+### ✅ Kayıtlı Kullanıcıları Kontrol Etme
+
+```bash
+# Tüm kayıtlı kullanıcıları listele
+python run_user.py --list
+
+# Çıktı:
+# 📋 Kayıtlı Kullanıcılar:
+#    • kaan
+#    • ali
+#    • mehmet
+```
+
 ### Her Arkadaş İçin Telegram Botu Oluşturma:
 
 1. Telegram'da @BotFather'a git
@@ -80,7 +107,14 @@ Bu script şunları soracak:
 2. `/start` yaz
 3. "Id" yazan sayıyı kopyala
 
----
+### 🔄 Tekrar: Her arkadaş için setup_user.py'yi çalıştır
+
+```bash
+python setup_user.py   # Kaan için
+python setup_user.py   # Ali için
+python setup_user.py   # Mehmet için
+# ... her arkadaş için tekrar
+```
 
 ## ✅ Adım 4: Botu Test Etme
 
