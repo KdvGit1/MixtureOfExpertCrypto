@@ -2034,6 +2034,39 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.error(f"Price error for {symbol}: {e}")
             return None
     
+    def _setup_futures_symbol(self, coin: str) -> bool:
+        """
+        Setup leverage and margin mode for a futures symbol before trading.
+        This ensures the correct leverage and ISOLATED margin mode are set.
+        Should be called before each futures trade.
+        """
+        if self.config.trading_mode != 'futures':
+            return True  # Not needed for spot
+        
+        symbol = f"{coin}/USDT:USDT"
+        try:
+            # Set margin mode to ISOLATED first (must be done before leverage on some coins)
+            try:
+                self.exchange.set_margin_mode(self.config.margin_type, symbol)
+                self.logger.info(f"✅ Margin mode set to {self.config.margin_type.upper()} for {coin}")
+            except Exception as e:
+                # May fail if already set or position exists, that's OK
+                if "No need to change margin type" not in str(e) and "margin type" not in str(e).lower():
+                    self.logger.warning(f"Margin mode warning for {coin}: {e}")
+            
+            # Set leverage
+            try:
+                self.exchange.set_leverage(self.config.leverage, symbol)
+                self.logger.info(f"✅ Leverage set to {self.config.leverage}x for {coin}")
+            except Exception as e:
+                self.logger.warning(f"Leverage warning for {coin}: {e}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to setup futures for {coin}: {e}")
+            return False
+    
     # ========== PREDICTION ==========
     
     def get_prediction(self, coin: str, timeframe: str) -> Optional[Dict]:
@@ -2130,9 +2163,26 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         if self.daily_trades >= self.config.max_daily_trades:
             return (False, f"📊 Günlük trade limiti: {self.daily_trades}/{self.config.max_daily_trades}")
         
-        # Check minimum balance
-        if usdt_balance < self.config.min_balance_usdt:
-            return (False, f"💰 Minimum bakiye: ${usdt_balance:.2f} altinda ${self.config.min_balance_usdt:.2f}")
+        # Count open positions
+        open_positions = sum(1 for p in self.positions.values() if p.side != "FLAT")
+        
+        # Calculate total portfolio value (free USDT + open positions value)
+        total_portfolio_value = usdt_balance
+        for coin, pos in self.positions.items():
+            if pos.side != "FLAT" and pos.amount > 0:
+                price = self.get_current_price(f"{coin}/USDT")
+                if price:
+                    position_value = pos.amount * price
+                    # For futures, the margin is position_value / leverage
+                    if self.config.trading_mode == 'futures':
+                        total_portfolio_value += position_value / self.config.leverage
+                    else:
+                        total_portfolio_value += position_value
+        
+        # Check minimum balance - use TOTAL portfolio value, not just free USDT
+        # Also skip this check if there are open positions (we need to manage them)
+        if open_positions == 0 and total_portfolio_value < self.config.min_balance_usdt:
+            return (False, f"💰 Minimum bakiye: ${total_portfolio_value:.2f} < ${self.config.min_balance_usdt:.2f}")
         
         return (True, "✅ OK")
     
@@ -2331,8 +2381,12 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         """Execute buy order."""
         try:
             # Symbol format differs for spot vs futures
-            if self.config.trading_mode == 'futures':
+            is_futures = self.config.trading_mode == 'futures'
+            if is_futures:
                 symbol = f"{coin}/USDT:USDT"
+                # Setup leverage and margin mode BEFORE placing order
+                if not self.config.dry_run:
+                    self._setup_futures_symbol(coin)
             else:
                 symbol = f"{coin}/USDT"
             
@@ -2344,12 +2398,20 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             fee_rate = self.config.bnb_fee_rate if self.config.use_bnb_for_fees else self.config.base_fee_rate
             fee = usdt_amount * fee_rate
             net_usdt = usdt_amount - fee
-            amount = net_usdt / price
+            
+            # For futures: margin * leverage = position value
+            # If you put 8 USDT margin with 5x leverage, you get 40 USDT position
+            if is_futures:
+                position_value = net_usdt * self.config.leverage
+                amount = position_value / price
+            else:
+                amount = net_usdt / price
             
             # Round
             amount = float(Decimal(str(amount)).quantize(Decimal('0.000001'), rounding=ROUND_DOWN))
             
-            self.logger.info(f"📈 BUY {coin}: {amount:.6f} @ ${price:,.5f}")
+            self.logger.info(f"📈 BUY {coin}: {amount:.6f} @ ${price:,.5f}" + 
+                           (f" (margin: ${net_usdt:.2f}, leverage: {self.config.leverage}x)" if is_futures else ""))
             
             if not self.config.dry_run:
                 self.exchange.create_market_buy_order(symbol, amount)
@@ -2862,6 +2924,11 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 return False
             
             symbol = f"{coin}/USDT:USDT"
+            
+            # Setup leverage and margin mode BEFORE placing order
+            if not self.config.dry_run:
+                self._setup_futures_symbol(coin)
+            
             price = self.get_current_price(f"{coin}/USDT")
             if price is None:
                 return False
@@ -2870,12 +2937,16 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             fee_rate = self.config.bnb_fee_rate if self.config.use_bnb_for_fees else self.config.base_fee_rate
             fee = usdt_amount * fee_rate
             net_usdt = usdt_amount - fee
-            amount = net_usdt / price
+            
+            # For futures: margin * leverage = position value
+            # If you put 8 USDT margin with 5x leverage, you get 40 USDT position
+            position_value = net_usdt * self.config.leverage
+            amount = position_value / price
             
             # Round
             amount = float(Decimal(str(amount)).quantize(Decimal('0.000001'), rounding=ROUND_DOWN))
             
-            self.logger.info(f"📉 SHORT {coin}: {amount:.6f} @ ${price:,.5f}")
+            self.logger.info(f"📉 SHORT {coin}: {amount:.6f} @ ${price:,.5f} (margin: ${net_usdt:.2f}, leverage: {self.config.leverage}x)")
             
             if not self.config.dry_run:
                 self.exchange.create_market_sell_order(symbol, amount)
@@ -3081,6 +3152,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         self.logger.info("🔄 Starting trading loop...")
         
         last_candle_minute = -1
+        last_pre_sync_minute = -1  # Track pre-trade sync timing
         
         while True:
             try:
@@ -3092,6 +3164,46 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 tf = self.config.default_timeframe
                 tf_minutes = {'15m': 15, '1h': 60}.get(tf, 15)
                 candle_minute = (now.minute // tf_minutes) * tf_minutes
+                
+                # ========== PRE-TRADE SYNC (2 minutes before trading) ==========
+                # For 15m: sync at minute 13-14 (before minute 0/15/30/45)
+                # For 1h: sync at minute 58-59 (before minute 0)
+                pre_sync_start = tf_minutes - 2  # 13 for 15m, 58 for 1h
+                minute_in_candle = now.minute % tf_minutes
+                
+                if minute_in_candle >= pre_sync_start and not self.config.dry_run:
+                    # Calculate which candle this pre-sync is for
+                    upcoming_candle = candle_minute + tf_minutes
+                    if upcoming_candle >= 60:
+                        upcoming_candle = 0
+                    
+                    # Only sync once per candle cycle
+                    if last_pre_sync_minute != candle_minute:
+                        last_pre_sync_minute = candle_minute
+                        
+                        self.logger.info(f"🔄 Pre-trade sync başlatılıyor ({now.strftime('%H:%M')}) - işlem kararı öncesi pozisyon kontrolü")
+                        
+                        synced, closed_coins = await self.sync_positions_with_exchange()
+                        
+                        if synced:
+                            # Count active positions
+                            active_positions = sum(1 for p in self.positions.values() if p.side in ["LONG", "SHORT"])
+                            
+                            sync_msg = f"🔄 <b>Pre-Trade Sync ({now.strftime('%H:%M')})</b>\n\n"
+                            sync_msg += f"⏰ Sonraki işlem döngüsü: {(now.hour + (1 if upcoming_candle == 0 and tf_minutes == 60 else 0)) % 24:02d}:{upcoming_candle:02d}\n"
+                            sync_msg += f"📊 Aktif pozisyon: {active_positions}\n"
+                            
+                            if closed_coins:
+                                sync_msg += f"\n⚠️ <b>Manuel kapatma algılandı:</b>\n"
+                                for coin in closed_coins:
+                                    sync_msg += f"• {coin}\n"
+                            else:
+                                sync_msg += f"\n✅ Tüm pozisyonlar senkronize"
+                            
+                            await self.send_notification(sync_msg)
+                            self.logger.info(f"✅ Pre-trade sync tamamlandı - {active_positions} aktif pozisyon")
+                        else:
+                            self.logger.warning("⚠️ Pre-trade sync başarısız oldu")
                 
                 # Reset daily stats at midnight
                 self.reset_daily_stats()
@@ -3127,6 +3239,22 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         if closed_coins:
                             self.logger.info(f"🔄 Manuel kapatma algılandı: {', '.join(closed_coins)}")
                     
+                    # Calculate total portfolio value (free USDT + open positions)
+                    # This is used for proper position sizing
+                    total_portfolio_value = usdt_balance
+                    for coin, pos in self.positions.items():
+                        if pos.side != "FLAT" and pos.amount > 0:
+                            price = self.get_current_price(f"{coin}/USDT")
+                            if price:
+                                position_value = pos.amount * price
+                                # For futures, margin = position_value / leverage
+                                if self.config.trading_mode == 'futures':
+                                    total_portfolio_value += position_value / self.config.leverage
+                                else:
+                                    total_portfolio_value += position_value
+                    
+                    self.logger.info(f"💼 Toplam portföy: ${total_portfolio_value:,.2f} (Serbest: ${usdt_balance:,.2f})")
+                    
                     # Scan all configured coins
                     for coin in self.config.coins_to_trade:
                         prediction = self.get_prediction(coin, tf)
@@ -3139,8 +3267,13 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         self.logger.info(f"   → {action}: {reason}")
                         
                         if action == 'BUY':
-                            # Position size: (total_balance * position_pct) / max_positions
-                            trade_amount = (usdt_balance * self.config.position_pct) / self.config.max_positions
+                            # Position size: (total_portfolio * position_pct) / max_positions
+                            # Uses total portfolio value (free + positions) for proper sizing
+                            trade_amount = (total_portfolio_value * self.config.position_pct) / self.config.max_positions
+                            
+                            # Also check if we have enough FREE balance for this trade
+                            if trade_amount > usdt_balance:
+                                trade_amount = usdt_balance * 0.95  # Use 95% of free balance
                             
                             if trade_amount > 5:
                                 success = await self.execute_buy(coin, trade_amount, prediction)
@@ -3152,7 +3285,12 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         
                         elif action == 'GRID_BUY':
                             # Grid buy: total position allocation for this coin
-                            total_position_usdt = (usdt_balance * self.config.position_pct) / self.config.max_positions
+                            # Uses total portfolio value for proper sizing
+                            total_position_usdt = (total_portfolio_value * self.config.position_pct) / self.config.max_positions
+                            
+                            # Also check if we have enough FREE balance for this trade
+                            if total_position_usdt > usdt_balance:
+                                total_position_usdt = usdt_balance * 0.95
                             
                             if total_position_usdt > 5:
                                 success = await self.execute_grid_buy(coin, total_position_usdt, prediction)
@@ -3178,8 +3316,13 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                                 await self.send_notification(f"[HATA] {coin} SELL basarisiz - exchange hatasi")
                         
                         elif action == 'SHORT':
-                            # Position size: (total_balance * position_pct) / max_positions
-                            trade_amount = (usdt_balance * self.config.position_pct) / self.config.max_positions
+                            # Position size: (total_portfolio * position_pct) / max_positions
+                            # Uses total portfolio value for proper sizing
+                            trade_amount = (total_portfolio_value * self.config.position_pct) / self.config.max_positions
+                            
+                            # Also check if we have enough FREE balance for this trade
+                            if trade_amount > usdt_balance:
+                                trade_amount = usdt_balance * 0.95
                             
                             if trade_amount > 5:
                                 success = await self.execute_short(coin, trade_amount, prediction)
@@ -3249,7 +3392,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         await self.telegram_app.updater.start_polling()
         
         # Send startup message
-        await self.send_notification(f"🤖 Bot başlatıldı!\n\nMod: {'TESTNET' if self.config.testnet else 'MAINNET'}\nCoinler: {', '.join(self.config.coins_to_trade)}\n\n/start ile aktif edin.")
+        await self.send_notification(f"🤖 Bot başlatıldı!\n\nMod: {'TESTNET' if self.config.testnet else 'MAINNET'}\nCoinler: {', '.join(self.config.coins_to_trade)}\n\n/start ile aktif edin. /help ile yardım alabilirsiniz.")
         
         self.logger.info("✅ Telegram active, starting trading loop...")
         

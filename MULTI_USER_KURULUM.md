@@ -45,6 +45,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 # PyTorch CPU-only (Raspberry Pi için)
+pip install torch==2.6.0+cpu --index-url https://download.pytorch.org/whl/cpu
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
