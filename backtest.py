@@ -52,6 +52,12 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import seaborn as sns
+from sklearn.metrics import confusion_matrix, classification_report
+from scipy import stats
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Import from existing modules
 from train_models.data_fetcher import get_crypto_history, prepare_dual_dataframes
@@ -61,6 +67,7 @@ from train_models.ai_engine_improved import MultiBranchModel, CNN_FEATURES, LSTM
 # CONFIGURATION
 # ============================================
 KAGGLE_OUTPUTS_DIR = PROJECT_ROOT / 'kaggle_outputs'
+ENHANCED_MODELS_DIR = PROJECT_ROOT / 'enhanced_models'  # New enhanced models
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Window sizes
@@ -81,6 +88,27 @@ class TradeResult:
     direction_correct: bool
     
 @dataclass
+class PredictionMetrics:
+    """Metrics measuring how well the model predicts target values."""
+    mae: float  # Mean Absolute Error
+    rmse: float  # Root Mean Squared Error
+    mape: float  # Mean Absolute Percentage Error
+    correlation: float  # Pearson correlation coefficient
+    r_squared: float  # R-squared (coefficient of determination)
+    direction_precision: float  # Precision for bullish predictions
+    direction_recall: float  # Recall for bullish predictions
+    direction_f1: float  # F1 score for direction prediction
+    
+@dataclass
+class ConfusionMatrixData:
+    """Confusion matrix data for direction prediction."""
+    true_positive: int  # Predicted UP, was UP
+    true_negative: int  # Predicted DOWN, was DOWN
+    false_positive: int  # Predicted UP, was DOWN
+    false_negative: int  # Predicted DOWN, was UP
+    matrix: np.ndarray = field(default_factory=lambda: np.zeros((2, 2)))
+
+@dataclass
 class BacktestResults:
     """Complete backtest results."""
     coin: str
@@ -96,6 +124,8 @@ class BacktestResults:
     max_drawdown: float
     sharpe_ratio: float = 0.0
     profit_factor: float = 0.0
+    prediction_metrics: PredictionMetrics = None
+    confusion_data: ConfusionMatrixData = None
     trades: List[TradeResult] = field(default_factory=list)
 
 @dataclass
@@ -113,63 +143,95 @@ class StrategyResult:
 # ============================================
 # MODEL DISCOVERY
 # ============================================
-def discover_models() -> List[Dict]:
+def discover_models(include_enhanced: bool = False, enhanced_only: bool = False) -> List[Dict]:
     """
-    Automatically discover all models in kaggle_outputs directory.
-    Returns list of dicts with coin, timeframe, and paths.
+    Automatically discover all models in kaggle_outputs and/or enhanced_models directories.
+    Returns list of dicts with coin, timeframe, paths, and enhanced flag.
+    
+    Args:
+        include_enhanced: If True, include both original and enhanced models
+        enhanced_only: If True, only return enhanced models
     """
     models = []
     
-    # Find all model files
-    model_files = list(KAGGLE_OUTPUTS_DIR.glob("*_model.pth"))
+    # Define which directories to search
+    dirs_to_search = []
+    if not enhanced_only:
+        dirs_to_search.append((KAGGLE_OUTPUTS_DIR, False))  # (path, is_enhanced)
+    if include_enhanced or enhanced_only:
+        dirs_to_search.append((ENHANCED_MODELS_DIR, True))
     
-    for model_path in model_files:
-        # Parse filename: {COIN}_{TF}_model.pth
-        filename = model_path.stem  # e.g., "BTC_15m_model"
-        parts = filename.replace("_model", "").rsplit("_", 1)  # Split from right
+    for model_dir, is_enhanced in dirs_to_search:
+        if not model_dir.exists():
+            continue
+            
+        # Find all model files
+        model_files = list(model_dir.glob("*_model.pth"))
         
-        if len(parts) == 2:
-            coin, timeframe = parts
+        for model_path in model_files:
+            # Parse filename: {COIN}_{TF}_model.pth
+            filename = model_path.stem  # e.g., "BTC_15m_model"
+            parts = filename.replace("_model", "").rsplit("_", 1)  # Split from right
             
-            # Check for required files
-            params_path = KAGGLE_OUTPUTS_DIR / f"{coin}_{timeframe}_params.json"
-            stats_path = KAGGLE_OUTPUTS_DIR / f"{coin}_{timeframe}_stats.json"
-            
-            if params_path.exists() and stats_path.exists():
-                models.append({
-                    'coin': coin,
-                    'timeframe': timeframe,
-                    'model_path': model_path,
-                    'params_path': params_path,
-                    'stats_path': stats_path
-                })
+            if len(parts) == 2:
+                coin, timeframe = parts
+                
+                # Check for required files
+                params_path = model_dir / f"{coin}_{timeframe}_params.json"
+                stats_path = model_dir / f"{coin}_{timeframe}_stats.json"
+                
+                if params_path.exists() and stats_path.exists():
+                    models.append({
+                        'coin': coin,
+                        'timeframe': timeframe,
+                        'model_path': model_path,
+                        'params_path': params_path,
+                        'stats_path': stats_path,
+                        'enhanced': is_enhanced,
+                        'model_dir': model_dir
+                    })
     
-    # Sort by coin, then timeframe
-    models.sort(key=lambda x: (x['coin'], x['timeframe']))
+    # Sort by enhanced (enhanced first), then coin, then timeframe
+    models.sort(key=lambda x: (not x['enhanced'], x['coin'], x['timeframe']))
     return models
 
 # ============================================
 # BACKTESTER CLASS
 # ============================================
 class Backtester:
-    """Backtest AI models on historical data using kaggle_outputs models."""
+    """Backtest AI models on historical data - supports both original and enhanced models."""
     
-    def __init__(self, coin: str, timeframe: str, months_back: int, model_info: Optional[Dict] = None):
+    def __init__(self, coin: str, timeframe: str, months_back: int, model_info: Optional[Dict] = None, use_enhanced: bool = False):
         self.coin = coin.upper()
         self.timeframe = timeframe
         self.months_back = months_back
         self.symbol = f"{self.coin}/USDT"
-        self.model: Optional[MultiBranchModel] = None
+        self.model = None  # Can be MultiBranchModel or EnhancedMultiBranchModel
         self.model_info = model_info
         self.stats = None
+        self.is_enhanced = use_enhanced or (model_info and model_info.get('enhanced', False))
         
-    def load_model(self) -> Optional[MultiBranchModel]:
-        """Load the model from kaggle_outputs."""
+        # Feature definitions will be set based on model type
+        self.cnn_features = None
+        self.lstm_features = None
+        self.tr_features = None
+        self.cnn_window = None
+        self.lstm_window = None
+        self.tr_window = None
+        
+    def load_model(self):
+        """Load the model - detects and handles both original and enhanced models."""
         # Find model info if not provided
         if self.model_info is None:
-            model_path = KAGGLE_OUTPUTS_DIR / f"{self.coin}_{self.timeframe}_model.pth"
-            params_path = KAGGLE_OUTPUTS_DIR / f"{self.coin}_{self.timeframe}_params.json"
-            stats_path = KAGGLE_OUTPUTS_DIR / f"{self.coin}_{self.timeframe}_stats.json"
+            # Try enhanced first if use_enhanced is True
+            if self.is_enhanced:
+                model_dir = ENHANCED_MODELS_DIR
+            else:
+                model_dir = KAGGLE_OUTPUTS_DIR
+                
+            model_path = model_dir / f"{self.coin}_{self.timeframe}_model.pth"
+            params_path = model_dir / f"{self.coin}_{self.timeframe}_params.json"
+            stats_path = model_dir / f"{self.coin}_{self.timeframe}_stats.json"
             
             if not model_path.exists():
                 print(f"❌ Model not found: {model_path}")
@@ -178,13 +240,18 @@ class Backtester:
             self.model_info = {
                 'model_path': model_path,
                 'params_path': params_path,
-                'stats_path': stats_path
+                'stats_path': stats_path,
+                'enhanced': self.is_enhanced
             }
         
         try:
             # Load parameters
             with open(self.model_info['params_path']) as f:
                 params = json.load(f)
+            
+            # Check if this is an enhanced model
+            self.is_enhanced = params.get('enhanced', False) or self.model_info.get('enhanced', False)
+            
             embed_dim = params.get('embed_dim', 96)
             dropout = params.get('dropout', 0.15)
             
@@ -192,11 +259,51 @@ class Backtester:
             with open(self.model_info['stats_path']) as f:
                 self.stats = json.load(f)
             
-            print(f"🧠 Loading model: {self.coin}_{self.timeframe}")
+            model_type = "ENHANCED" if self.is_enhanced else "ORIGINAL"
+            print(f"🧠 Loading model: {self.coin}_{self.timeframe} [{model_type}]")
             print(f"   Parameters: embed_dim={embed_dim}, dropout={dropout:.2f}")
             
-            # Load model
-            model = MultiBranchModel(embed_dim=embed_dim, dropout=dropout).to(DEVICE)
+            if self.is_enhanced:
+                # ============ ENHANCED MODEL ============
+                from local_train_enhanced import (
+                    EnhancedMultiBranchModel, 
+                    CNN_FEATURES as ENHANCED_CNN_FEATURES,
+                    LSTM_FEATURES as ENHANCED_LSTM_FEATURES,
+                    TR_FEATURES as ENHANCED_TR_FEATURES
+                )
+                
+                nhead = params.get('nhead', 8)
+                num_layers = params.get('num_layers', 4)
+                
+                model = EnhancedMultiBranchModel(
+                    embed_dim=embed_dim, 
+                    dropout=dropout,
+                    nhead=nhead,
+                    num_layers=num_layers
+                ).to(DEVICE)
+                
+                # Set enhanced features and windows
+                self.cnn_features = ENHANCED_CNN_FEATURES
+                self.lstm_features = ENHANCED_LSTM_FEATURES
+                self.tr_features = ENHANCED_TR_FEATURES
+                self.cnn_window = 16
+                self.lstm_window = 96
+                self.tr_window = 96
+                
+                print(f"   Features: CNN={len(self.cnn_features)}, LSTM={len(self.lstm_features)}, TR={len(self.tr_features)}")
+            else:
+                # ============ ORIGINAL MODEL ============
+                model = MultiBranchModel(embed_dim=embed_dim, dropout=dropout).to(DEVICE)
+                
+                # Use original features and windows
+                self.cnn_features = CNN_FEATURES
+                self.lstm_features = LSTM_FEATURES
+                self.tr_features = TR_FEATURES
+                self.cnn_window = CNN_WINDOW
+                self.lstm_window = LSTM_WINDOW
+                self.tr_window = TR_WINDOW
+            
+            # Load state dict
             state_dict = torch.load(self.model_info['model_path'], map_location=DEVICE, weights_only=True)
             
             # Handle DataParallel prefix if present
@@ -210,6 +317,8 @@ class Backtester:
             
         except Exception as e:
             print(f"❌ Error loading model: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def fetch_data(self) -> Optional[pd.DataFrame]:
@@ -230,49 +339,71 @@ class Backtester:
             return None
     
     def prepare_data(self, df: pd.DataFrame) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-        """Prepare data using existing prepare_dual_dataframes function."""
+        """Prepare data - uses appropriate method based on model type."""
         try:
-            df_display, df_ai = prepare_dual_dataframes(df)
-            print(f"✅ Prepared data: {len(df_ai)} samples ready for AI")
+            if self.is_enhanced:
+                # Use enhanced indicator function for enhanced models
+                from local_train_enhanced import prepare_ai_dataframe
+                df_ai = prepare_ai_dataframe(df)
+                df_display = df.copy()
+                print(f"✅ Prepared ENHANCED data: {len(df_ai)} samples ready for AI")
+            else:
+                # Use original prepare_dual_dataframes for original models
+                df_display, df_ai = prepare_dual_dataframes(df)
+                print(f"✅ Prepared data: {len(df_ai)} samples ready for AI")
             return df_display, df_ai
         except Exception as e:
             print(f"❌ Error preparing data: {e}")
+            import traceback
+            traceback.print_exc()
             return None, None
     
     def prepare_model_input(self, df_ai: pd.DataFrame, end_idx: int):
-        """Prepare the input tensors using model-specific normalization stats."""
-        # Get column indices for each branch
-        cnn_cols = [df_ai.columns.get_loc(c) for c in CNN_FEATURES if c in df_ai.columns]
-        lstm_cols = [df_ai.columns.get_loc(c) for c in LSTM_FEATURES if c in df_ai.columns]
-        tr_cols = [df_ai.columns.get_loc(c) for c in TR_FEATURES if c in df_ai.columns]
+        """Prepare the input tensors - handles both original and enhanced models."""
+        # Use instance features (set during load_model)
+        cnn_features = self.cnn_features if self.cnn_features else CNN_FEATURES
+        lstm_features = self.lstm_features if self.lstm_features else LSTM_FEATURES
+        tr_features = self.tr_features if self.tr_features else TR_FEATURES
+        cnn_window = self.cnn_window if self.cnn_window else CNN_WINDOW
+        lstm_window = self.lstm_window if self.lstm_window else LSTM_WINDOW
+        tr_window = self.tr_window if self.tr_window else TR_WINDOW
         
-        # USE MODEL-SPECIFIC STATS (from training) instead of computing from data
+        # Get column indices for each branch
+        cnn_cols = [df_ai.columns.get_loc(c) for c in cnn_features if c in df_ai.columns]
+        lstm_cols = [df_ai.columns.get_loc(c) for c in lstm_features if c in df_ai.columns]
+        tr_cols = [df_ai.columns.get_loc(c) for c in tr_features if c in df_ai.columns]
+        
         df_subset = df_ai.iloc[:end_idx]
         
-        if self.stats:
-            mean = pd.Series(self.stats['mean'])
-            std = pd.Series(self.stats['std'])
+        if self.is_enhanced:
+            # Enhanced models: data is ALREADY normalized in prepare_ai_dataframe
+            # No additional normalization needed!
+            df_normalized = df_subset
         else:
-            # Fallback to computing from data
-            mean = df_subset.mean()
-            std = df_subset.std()
-            if 'Log_Ret' in mean:
-                mean['Log_Ret'] = 0.0
-        
-        std[std == 0] = 1.0
-        df_normalized = (df_subset - mean) / std
+            # Original models: apply z-score normalization
+            if self.stats:
+                mean = pd.Series(self.stats['mean'])
+                std = pd.Series(self.stats['std'])
+            else:
+                mean = df_subset.mean()
+                std = df_subset.std()
+                if 'Log_Ret' in mean:
+                    mean['Log_Ret'] = 0.0
+            
+            std[std == 0] = 1.0
+            df_normalized = (df_subset - mean) / std
         
         data = df_normalized.values
-        max_window = max(CNN_WINDOW, LSTM_WINDOW, TR_WINDOW)
+        max_window = max(cnn_window, lstm_window, tr_window)
         
         if len(data) < max_window:
             return None, None, None
         
         # Get the last window of data
         t = len(data)
-        x_cnn = data[t - CNN_WINDOW:t, cnn_cols]
-        x_lstm = data[t - LSTM_WINDOW:t, lstm_cols]
-        x_tr = data[t - TR_WINDOW:t, tr_cols]
+        x_cnn = data[t - cnn_window:t, cnn_cols]
+        x_lstm = data[t - lstm_window:t, lstm_cols]
+        x_tr = data[t - tr_window:t, tr_cols]
         
         # Convert to tensors and add batch dimension
         x_cnn = torch.tensor(x_cnn, dtype=torch.float32).unsqueeze(0).to(DEVICE)
@@ -287,10 +418,16 @@ class Backtester:
         if not self.load_model():
             return None
         
+        # Get window sizes from instance (set during load_model)
+        cnn_window = self.cnn_window if self.cnn_window else CNN_WINDOW
+        lstm_window = self.lstm_window if self.lstm_window else LSTM_WINDOW
+        tr_window = self.tr_window if self.tr_window else TR_WINDOW
+        max_window = max(cnn_window, lstm_window, tr_window)
+        
         # Fetch data
         df_raw = self.fetch_data()
-        if df_raw is None or len(df_raw) < LSTM_WINDOW + 100:
-            print(f"❌ Insufficient data. Need at least {LSTM_WINDOW + 100} candles.")
+        if df_raw is None or len(df_raw) < max_window + 100:
+            print(f"❌ Insufficient data. Need at least {max_window + 100} candles.")
             return None
         
         # Prepare data
@@ -299,11 +436,10 @@ class Backtester:
             return None
         
         if verbose:
-            print(f"🚀 Starting backtest from index {LSTM_WINDOW} to {len(df_ai) - 1}...")
+            print(f"🚀 Starting backtest from index {max_window} to {len(df_ai) - 1}...")
         
         trades: List[TradeResult] = []
         correct_direction = 0
-        max_window = max(CNN_WINDOW, LSTM_WINDOW, TR_WINDOW)
         
         # Sliding window backtest
         total_iterations = len(df_ai) - max_window - 1
@@ -384,6 +520,82 @@ class Backtester:
         losses = abs(sum([r for r in strategy_returns if r < 0]))
         profit_factor = gains / losses if losses > 0 else float('inf') if gains > 0 else 0.0
         
+        # ============================================
+        # CALCULATE PREDICTION QUALITY METRICS
+        # ============================================
+        predictions_arr = np.array([t.prediction for t in trades])
+        actuals_arr = np.array([t.actual for t in trades])
+        
+        # Distance metrics (how close are predictions to actual values)
+        mae = np.mean(np.abs(predictions_arr - actuals_arr))
+        rmse = np.sqrt(np.mean((predictions_arr - actuals_arr) ** 2))
+        
+        # MAPE (Mean Absolute Percentage Error) - with protection for zero actuals
+        non_zero_mask = actuals_arr != 0
+        if np.any(non_zero_mask):
+            mape = np.mean(np.abs((actuals_arr[non_zero_mask] - predictions_arr[non_zero_mask]) / actuals_arr[non_zero_mask])) * 100
+        else:
+            mape = 0.0
+        
+        # Correlation and R-squared
+        if len(predictions_arr) > 2:
+            correlation, _ = stats.pearsonr(predictions_arr, actuals_arr)
+            # R-squared (coefficient of determination)
+            ss_res = np.sum((actuals_arr - predictions_arr) ** 2)
+            ss_tot = np.sum((actuals_arr - np.mean(actuals_arr)) ** 2)
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+        else:
+            correlation = 0.0
+            r_squared = 0.0
+        
+        # ============================================
+        # CONFUSION MATRIX FOR DIRECTION PREDICTION
+        # ============================================
+        # Convert to binary labels: 1 = UP (bullish), 0 = DOWN (bearish)
+        pred_labels = (predictions_arr > 0).astype(int)
+        actual_labels = (actuals_arr > 0).astype(int)
+        
+        # Calculate confusion matrix
+        cm = confusion_matrix(actual_labels, pred_labels, labels=[0, 1])
+        
+        # Extract confusion matrix values
+        # cm[0,0] = TN (predicted DOWN, was DOWN)
+        # cm[0,1] = FP (predicted UP, was DOWN)
+        # cm[1,0] = FN (predicted DOWN, was UP)
+        # cm[1,1] = TP (predicted UP, was UP)
+        tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
+        
+        # Calculate precision, recall, F1 for bullish predictions
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        # Create dataclasses
+        prediction_metrics = PredictionMetrics(
+            mae=mae,
+            rmse=rmse,
+            mape=mape,
+            correlation=correlation,
+            r_squared=r_squared,
+            direction_precision=precision * 100,
+            direction_recall=recall * 100,
+            direction_f1=f1 * 100
+        )
+        
+        confusion_data = ConfusionMatrixData(
+            true_positive=int(tp),
+            true_negative=int(tn),
+            false_positive=int(fp),
+            false_negative=int(fn),
+            matrix=cm
+        )
+        
+        if verbose:
+            print(f"\n📊 Prediction Quality Metrics:")
+            print(f"   📏 MAE: {mae*100:.4f}% | RMSE: {rmse*100:.4f}%")
+            print(f"   📈 Correlation: {correlation:.4f} | R²: {r_squared:.4f}")
+            print(f"   🎯 Precision: {precision*100:.1f}% | Recall: {recall*100:.1f}% | F1: {f1*100:.1f}%")
+        
         results = BacktestResults(
             coin=self.coin,
             timeframe=self.timeframe,
@@ -398,6 +610,8 @@ class Backtester:
             max_drawdown=max_drawdown,
             sharpe_ratio=sharpe_ratio,
             profit_factor=profit_factor,
+            prediction_metrics=prediction_metrics,
+            confusion_data=confusion_data,
             trades=trades
         )
         
@@ -829,6 +1043,37 @@ class Backtester:
         print(f"   📐 Sharpe Ratio: {results.sharpe_ratio:.2f}")
         print(f"   ⚖️ Profit Factor: {results.profit_factor:.2f}")
         
+        # Prediction Quality Metrics
+        if results.prediction_metrics:
+            pm = results.prediction_metrics
+            print(f"\n{'─' * 40}")
+            print("📏 PREDICTION QUALITY METRICS (Hedefe Uzaklık)")
+            print(f"{'─' * 40}")
+            print(f"   📏 MAE (Mean Absolute Error): {pm.mae * 100:.4f}%")
+            print(f"   📐 RMSE (Root Mean Squared Error): {pm.rmse * 100:.4f}%")
+            print(f"   📊 MAPE (Mean Abs % Error): {pm.mape:.2f}%")
+            print(f"   📈 Correlation (Pearson): {pm.correlation:.4f}")
+            print(f"   📉 R² (Coefficient of Determination): {pm.r_squared:.4f}")
+            print(f"\n   🎯 Direction Metrics:")
+            print(f"      Precision: {pm.direction_precision:.2f}%")
+            print(f"      Recall: {pm.direction_recall:.2f}%")
+            print(f"      F1 Score: {pm.direction_f1:.2f}%")
+        
+        # Confusion Matrix
+        if results.confusion_data:
+            cd = results.confusion_data
+            print(f"\n{'─' * 40}")
+            print("🔀 CONFUSION MATRIX (Yön Tahmini)")
+            print(f"{'─' * 40}")
+            print(f"\n                    Predicted")
+            print(f"                  DOWN    UP")
+            print(f"         DOWN   [{cd.true_negative:6d}] [{cd.false_positive:6d}]")
+            print(f"  Actual  UP    [{cd.false_negative:6d}] [{cd.true_positive:6d}]")
+            print(f"\n   TP (True Positive - Doğru Yükseliş): {cd.true_positive}")
+            print(f"   TN (True Negative - Doğru Düşüş): {cd.true_negative}")
+            print(f"   FP (False Positive - Yanlış Yükseliş): {cd.false_positive}")
+            print(f"   FN (False Negative - Yanlış Düşüş): {cd.false_negative}")
+        
         # Save to CSV and get output path
         output_dir, file_prefix = self.save_results_to_csv(results)
         
@@ -982,6 +1227,235 @@ class Backtester:
         plt.close()
         
         print(f"📈 Charts saved to: {chart_path}")
+        
+        # Generate Interactive Chart (Plotly - zoomable)
+        self.generate_interactive_prediction_chart(results, output_dir, file_prefix)
+        
+        # Generate Confusion Matrix Chart (if available)
+        if results.confusion_data and results.prediction_metrics:
+            self.generate_confusion_matrix_chart(results, output_dir, file_prefix)
+    
+    def generate_interactive_prediction_chart(self, results: BacktestResults, output_dir: Path, file_prefix: str) -> None:
+        """Generate interactive Plotly chart with zoom, pan, and hover for prediction vs actual analysis."""
+        print("🔍 Generating interactive chart (Plotly)...")
+        
+        # Prepare data
+        timestamps = [t.timestamp for t in results.trades]
+        predictions = [t.prediction * 100 for t in results.trades]
+        actuals = [t.actual * 100 for t in results.trades]
+        correct = [t.direction_correct for t in results.trades]
+        prices = [t.price for t in results.trades]
+        
+        # Create DataFrame for easier handling
+        df_trades = pd.DataFrame({
+            'timestamp': timestamps,
+            'prediction': predictions,
+            'actual': actuals,
+            'correct': correct,
+            'price': prices,
+            'color': ['Doğru' if c else 'Yanlış' for c in correct]
+        })
+        
+        # Create interactive scatter plot
+        fig = px.scatter(
+            df_trades,
+            x='prediction',
+            y='actual',
+            color='color',
+            color_discrete_map={'Doğru': '#2ecc71', 'Yanlış': '#e74c3c'},
+            hover_data={
+                'timestamp': True,
+                'prediction': ':.2f',
+                'actual': ':.2f',
+                'price': ':,.2f',
+                'color': False
+            },
+            labels={
+                'prediction': 'AI Tahmini (%)',
+                'actual': 'Gerçek Dönüş (%)',
+                'color': 'Yön Tahmini'
+            },
+            title=f'🔍 Prediction vs Actual - {results.coin}/{results.timeframe} ({results.months}m) | Zoom için sürükle!'
+        )
+        
+        # Add perfect prediction line
+        max_val = max(max(abs(p) for p in predictions), max(abs(a) for a in actuals))
+        fig.add_trace(go.Scatter(
+            x=[-max_val, max_val],
+            y=[-max_val, max_val],
+            mode='lines',
+            name='Mükemmel Tahmin',
+            line=dict(color='gray', dash='dash', width=1),
+            opacity=0.5
+        ))
+        
+        # Add zero lines
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+        fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
+        
+        # Update layout for better interactivity
+        fig.update_layout(
+            template='plotly_dark',
+            hovermode='closest',
+            dragmode='zoom',  # Default to zoom mode
+            xaxis=dict(
+                title='AI Tahmini (%)',
+                zeroline=True,
+                zerolinecolor='gray'
+            ),
+            yaxis=dict(
+                title='Gerçek Dönüş (%)',
+                zeroline=True,
+                zerolinecolor='gray',
+                scaleanchor='x',
+                scaleratio=1
+            ),
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01
+            ),
+            annotations=[
+                dict(
+                    text=f"Accuracy: {results.accuracy:.1f}% | Toplam: {len(results.trades)} tahmin",
+                    xref="paper", yref="paper",
+                    x=1, y=1.08,
+                    showarrow=False,
+                    font=dict(size=12)
+                )
+            ]
+        )
+        
+        # Update marker size for better visibility
+        fig.update_traces(marker=dict(size=8, opacity=0.7), selector=dict(mode='markers'))
+        
+        # Add range slider for zooming
+        fig.update_xaxes(rangeslider_visible=False)
+        
+        # Config for interactivity
+        config = {
+            'scrollZoom': True,
+            'displayModeBar': True,
+            'modeBarButtonsToAdd': ['drawopenpath', 'eraseshape', 'drawcircle'],
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': f'{file_prefix}_interactive',
+                'height': 800,
+                'width': 1200,
+                'scale': 2
+            }
+        }
+        
+        # Save as HTML
+        html_path = output_dir / f"{file_prefix}_interactive.html"
+        fig.write_html(str(html_path), config=config, include_plotlyjs='cdn')
+        
+        print(f"🔍 Interactive chart saved to: {html_path}")
+        print(f"   📌 Tarayıcıda aç: file:///{html_path}")
+    
+    def generate_confusion_matrix_chart(self, results: BacktestResults, output_dir: Path, file_prefix: str) -> None:
+        """Generate a dedicated confusion matrix visualization with prediction metrics."""
+        print("📊 Generating confusion matrix chart...")
+        
+        plt.style.use('seaborn-v0_8-whitegrid')
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig.suptitle(f'Model Prediction Quality: {results.coin} / {results.timeframe} ({results.months} months)', 
+                     fontsize=14, fontweight='bold')
+        
+        # 1. Confusion Matrix Heatmap
+        ax1 = axes[0]
+        cm = results.confusion_data.matrix
+        
+        # Create labels
+        labels = ['DOWN (Düşüş)', 'UP (Yükseliş)']
+        
+        # Plot heatmap
+        im = ax1.imshow(cm, interpolation='nearest', cmap='Blues')
+        ax1.figure.colorbar(im, ax=ax1, fraction=0.046, pad=0.04)
+        
+        # Add text annotations
+        thresh = cm.max() / 2.
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                ax1.text(j, i, format(cm[i, j], 'd'),
+                        ha="center", va="center",
+                        color="white" if cm[i, j] > thresh else "black",
+                        fontsize=16, fontweight='bold')
+        
+        ax1.set_xticks([0, 1])
+        ax1.set_yticks([0, 1])
+        ax1.set_xticklabels(labels)
+        ax1.set_yticklabels(labels)
+        ax1.set_xlabel('Predicted (Tahmin)', fontweight='bold')
+        ax1.set_ylabel('Actual (Gerçek)', fontweight='bold')
+        ax1.set_title('Confusion Matrix', fontweight='bold', fontsize=12)
+        
+        # Add legend box
+        cd = results.confusion_data
+        legend_text = (
+            f"True Positive (Doğru Yükseliş): {cd.true_positive}\n"
+            f"True Negative (Doğru Düşüş): {cd.true_negative}\n"
+            f"False Positive (Yanlış Yükseliş): {cd.false_positive}\n"
+            f"False Negative (Yanlış Düşüş): {cd.false_negative}"
+        )
+        ax1.text(1.05, 0.5, legend_text, transform=ax1.transAxes, fontsize=9,
+                verticalalignment='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        # 2. Prediction Quality Metrics Summary
+        ax2 = axes[1]
+        ax2.axis('off')
+        
+        pm = results.prediction_metrics
+        
+        # Create metrics table
+        metrics_data = [
+            ['Metrik', 'Değer', 'Açıklama'],
+            ['MAE', f'{pm.mae * 100:.4f}%', 'Mean Absolute Error'],
+            ['RMSE', f'{pm.rmse * 100:.4f}%', 'Root Mean Squared Error'],
+            ['MAPE', f'{pm.mape:.2f}%', 'Mean Absolute % Error'],
+            ['Correlation', f'{pm.correlation:.4f}', 'Pearson Korelasyon'],
+            ['R²', f'{pm.r_squared:.4f}', 'Determination Katsayısı'],
+            ['', '', ''],
+            ['Precision', f'{pm.direction_precision:.2f}%', 'Yükseliş Precisionı'],
+            ['Recall', f'{pm.direction_recall:.2f}%', 'Yükseliş Recallı'],
+            ['F1 Score', f'{pm.direction_f1:.2f}%', 'F1 Skoru'],
+            ['Accuracy', f'{results.accuracy:.2f}%', 'Genel Doğruluk']
+        ]
+        
+        table = ax2.table(
+            cellText=metrics_data[1:],
+            colLabels=metrics_data[0],
+            loc='center',
+            cellLoc='center',
+            colColours=['#4CAF50', '#2196F3', '#FFC107']
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1.2, 1.8)
+        
+        # Color code the metrics
+        for i, row in enumerate(metrics_data[1:], 1):
+            # Header row
+            for j in range(3):
+                cell = table[(i, j)]
+                if i == 6:  # Empty separator row
+                    cell.set_facecolor('white')
+                elif i < 6:  # Distance metrics
+                    cell.set_facecolor('#E3F2FD')  # Light blue
+                else:  # Direction metrics
+                    cell.set_facecolor('#E8F5E9')  # Light green
+        
+        ax2.set_title('Prediction Quality Metrics (Tahmin Kalitesi)', fontweight='bold', fontsize=12, pad=20)
+        
+        plt.tight_layout()
+        
+        # Save chart
+        cm_chart_path = output_dir / f"{file_prefix}_confusion_matrix.png"
+        plt.savefig(cm_chart_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"📊 Confusion matrix chart saved to: {cm_chart_path}")
 
 
 # ============================================
@@ -1077,7 +1551,7 @@ class BatchBacktester:
         # Prepare summary data
         summary_data = []
         for r in self.results:
-            summary_data.append({
+            data = {
                 'coin': r.coin,
                 'timeframe': r.timeframe,
                 'months': r.months,
@@ -1090,7 +1564,33 @@ class BatchBacktester:
                 'max_drawdown_pct': round(r.max_drawdown * 100, 2),
                 'sharpe_ratio': round(r.sharpe_ratio, 2),
                 'profit_factor': round(r.profit_factor, 2)
-            })
+            }
+            
+            # Add prediction quality metrics if available
+            if r.prediction_metrics:
+                pm = r.prediction_metrics
+                data.update({
+                    'mae_pct': round(pm.mae * 100, 4),
+                    'rmse_pct': round(pm.rmse * 100, 4),
+                    'mape': round(pm.mape, 2),
+                    'correlation': round(pm.correlation, 4),
+                    'r_squared': round(pm.r_squared, 4),
+                    'precision': round(pm.direction_precision, 2),
+                    'recall': round(pm.direction_recall, 2),
+                    'f1_score': round(pm.direction_f1, 2)
+                })
+            
+            # Add confusion matrix data if available
+            if r.confusion_data:
+                cd = r.confusion_data
+                data.update({
+                    'true_positive': cd.true_positive,
+                    'true_negative': cd.true_negative,
+                    'false_positive': cd.false_positive,
+                    'false_negative': cd.false_negative
+                })
+            
+            summary_data.append(data)
         
         df_summary = pd.DataFrame(summary_data)
         
@@ -1153,6 +1653,9 @@ class BatchBacktester:
         
         # Generate summary chart
         self.generate_summary_chart(df_summary, output_dir, timestamp)
+        
+        # Generate combined interactive prediction chart for all coins
+        self.generate_combined_interactive_chart(output_dir, timestamp)
     
     def generate_summary_chart(self, df: pd.DataFrame, output_dir: Path, timestamp: str):
         """Generate summary chart for all models."""
@@ -1224,6 +1727,277 @@ class BatchBacktester:
         plt.close()
         
         print(f"📈 Summary chart saved to: {chart_path}")
+        
+        # Generate prediction quality chart
+        self.generate_prediction_quality_chart(df, output_dir, timestamp)
+    
+    def generate_prediction_quality_chart(self, df: pd.DataFrame, output_dir: Path, timestamp: str):
+        """Generate combined prediction quality metrics chart for all models."""
+        print("📊 Generating combined prediction quality chart...")
+        
+        # Check if prediction metrics columns exist
+        if 'mae_pct' not in df.columns:
+            print("⚠️ No prediction metrics available for combined chart.")
+            return
+        
+        plt.style.use('seaborn-v0_8-darkgrid')
+        fig = plt.figure(figsize=(18, 14))
+        fig.suptitle(f'Combined Prediction Quality Metrics - All Models ({self.months_back} months)', 
+                     fontsize=16, fontweight='bold')
+        
+        # Create 3x2 grid
+        gs = fig.add_gridspec(3, 2, hspace=0.35, wspace=0.25)
+        
+        # Ensure model column exists
+        if 'model' not in df.columns:
+            df['model'] = df['coin'] + '_' + df['timeframe']
+        
+        # Sort by accuracy for consistent ordering
+        df_sorted = df.sort_values('accuracy', ascending=True)
+        models = df_sorted['model'].values
+        
+        # 1. MAE & RMSE Comparison (top left)
+        ax1 = fig.add_subplot(gs[0, 0])
+        x = np.arange(len(models))
+        width = 0.35
+        ax1.barh(x - width/2, df_sorted['mae_pct'], width, label='MAE', color='#3498db', alpha=0.8)
+        ax1.barh(x + width/2, df_sorted['rmse_pct'], width, label='RMSE', color='#e74c3c', alpha=0.8)
+        ax1.set_yticks(x)
+        ax1.set_yticklabels(models, fontsize=8)
+        ax1.set_xlabel('Error (%)')
+        ax1.set_title('MAE & RMSE Comparison (Düşük = Daha İyi)', fontweight='bold')
+        ax1.legend(loc='lower right')
+        ax1.invert_xaxis()  # Lower is better, so invert
+        
+        # 2. Correlation Comparison (top right)
+        ax2 = fig.add_subplot(gs[0, 1])
+        colors = ['#2ecc71' if c > 0 else '#e74c3c' for c in df_sorted['correlation']]
+        ax2.barh(models, df_sorted['correlation'], color=colors, alpha=0.8)
+        ax2.axvline(x=0, color='black', linestyle='-', linewidth=1)
+        ax2.set_xlabel('Pearson Correlation')
+        ax2.set_title('Tahmin-Gerçek Korelasyonu (Yüksek = Daha İyi)', fontweight='bold')
+        for i, (model, corr) in enumerate(zip(models, df_sorted['correlation'])):
+            ax2.text(corr + 0.01, i, f'{corr:.3f}', va='center', fontsize=7)
+        
+        # 3. Precision & Recall Comparison (middle left)
+        ax3 = fig.add_subplot(gs[1, 0])
+        x = np.arange(len(models))
+        width = 0.35
+        ax3.barh(x - width/2, df_sorted['precision'], width, label='Precision', color='#9b59b6', alpha=0.8)
+        ax3.barh(x + width/2, df_sorted['recall'], width, label='Recall', color='#f39c12', alpha=0.8)
+        ax3.set_yticks(x)
+        ax3.set_yticklabels(models, fontsize=8)
+        ax3.set_xlabel('Score (%)')
+        ax3.set_title('Precision & Recall (Yükseliş Tahminleri)', fontweight='bold')
+        ax3.legend(loc='lower right')
+        ax3.set_xlim(0, 100)
+        
+        # 4. F1 Score Ranking (middle right)
+        ax4 = fig.add_subplot(gs[1, 1])
+        colors = plt.cm.RdYlGn(df_sorted['f1_score'] / 100)
+        ax4.barh(models, df_sorted['f1_score'], color=colors, alpha=0.9)
+        ax4.axvline(x=50, color='red', linestyle='--', linewidth=1, label='%50')
+        ax4.set_xlabel('F1 Score (%)')
+        ax4.set_title('F1 Score Ranking (Yön Tahmini Başarısı)', fontweight='bold')
+        ax4.set_xlim(0, 100)
+        for i, (model, f1) in enumerate(zip(models, df_sorted['f1_score'])):
+            ax4.text(f1 + 1, i, f'{f1:.1f}%', va='center', fontsize=7)
+        
+        # 5. Confusion Matrix Summary - Stacked Bar (bottom left)
+        ax5 = fig.add_subplot(gs[2, 0])
+        if 'true_positive' in df_sorted.columns:
+            tp = df_sorted['true_positive'].values
+            tn = df_sorted['true_negative'].values
+            fp = df_sorted['false_positive'].values
+            fn = df_sorted['false_negative'].values
+            
+            # Stacked bar
+            ax5.barh(models, tp, label='True Positive (Doğru Yükseliş)', color='#27ae60', alpha=0.8)
+            ax5.barh(models, tn, left=tp, label='True Negative (Doğru Düşüş)', color='#2ecc71', alpha=0.8)
+            ax5.barh(models, fp, left=tp+tn, label='False Positive (Yanlış Yükseliş)', color='#e74c3c', alpha=0.8)
+            ax5.barh(models, fn, left=tp+tn+fp, label='False Negative (Yanlış Düşüş)', color='#c0392b', alpha=0.8)
+            ax5.set_xlabel('Prediction Count')
+            ax5.set_title('Confusion Matrix Summary (Tüm Modeller)', fontweight='bold')
+            ax5.legend(loc='upper right', fontsize=7)
+        
+        # 6. Metrics Summary Table (bottom right)
+        ax6 = fig.add_subplot(gs[2, 1])
+        ax6.axis('off')
+        
+        # Calculate aggregate statistics
+        avg_mae = df['mae_pct'].mean()
+        avg_rmse = df['rmse_pct'].mean()
+        avg_corr = df['correlation'].mean()
+        avg_precision = df['precision'].mean()
+        avg_recall = df['recall'].mean()
+        avg_f1 = df['f1_score'].mean()
+        avg_accuracy = df['accuracy'].mean()
+        
+        best_model_f1 = df.loc[df['f1_score'].idxmax(), 'model']
+        best_f1 = df['f1_score'].max()
+        best_model_corr = df.loc[df['correlation'].idxmax(), 'model']
+        best_corr = df['correlation'].max()
+        
+        summary_text = (
+            f"📊 ÖZET İSTATİSTİKLER ({len(df)} Model)\n"
+            f"{'─' * 40}\n\n"
+            f"📏 Ortalama MAE: {avg_mae:.4f}%\n"
+            f"📐 Ortalama RMSE: {avg_rmse:.4f}%\n"
+            f"📈 Ortalama Correlation: {avg_corr:.4f}\n\n"
+            f"🎯 Ortalama Precision: {avg_precision:.2f}%\n"
+            f"🔍 Ortalama Recall: {avg_recall:.2f}%\n"
+            f"⚖️ Ortalama F1 Score: {avg_f1:.2f}%\n"
+            f"✅ Ortalama Accuracy: {avg_accuracy:.2f}%\n\n"
+            f"{'─' * 40}\n"
+            f"🏆 En İyi F1 Score:\n   {best_model_f1}: {best_f1:.2f}%\n\n"
+            f"📈 En İyi Correlation:\n   {best_model_corr}: {best_corr:.4f}"
+        )
+        
+        ax6.text(0.1, 0.95, summary_text, transform=ax6.transAxes, fontsize=11,
+                verticalalignment='top', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        ax6.set_title('Aggregate Statistics', fontweight='bold', pad=20)
+        
+        plt.tight_layout()
+        
+        # Save chart
+        chart_path = output_dir / f"backtest_ALL_MODELS_{self.months_back}m_{timestamp}_prediction_quality.png"
+        plt.savefig(chart_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"📊 Prediction quality chart saved to: {chart_path}")
+    
+    def generate_combined_interactive_chart(self, output_dir: Path, timestamp: str):
+        """Generate combined interactive Plotly chart for all coins with dropdown selector."""
+        if not self.results:
+            return
+        
+        print("🔍 Generating combined interactive chart for all coins...")
+        
+        # Collect all trades from all results
+        all_data = []
+        for r in self.results:
+            model_name = f"{r.coin}_{r.timeframe}"
+            for t in r.trades:
+                all_data.append({
+                    'model': model_name,
+                    'coin': r.coin,
+                    'timeframe': r.timeframe,
+                    'timestamp': t.timestamp,
+                    'prediction': t.prediction * 100,
+                    'actual': t.actual * 100,
+                    'correct': 'Doğru' if t.direction_correct else 'Yanlış',
+                    'price': t.price
+                })
+        
+        df_all = pd.DataFrame(all_data)
+        
+        # Create figure with dropdown for each coin
+        fig = go.Figure()
+        
+        coins = df_all['model'].unique()
+        colors = {'Doğru': '#2ecc71', 'Yanlış': '#e74c3c'}
+        
+        # Add "ALL" option first - show all coins
+        for correct_val in ['Doğru', 'Yanlış']:
+            df_subset = df_all[df_all['correct'] == correct_val]
+            fig.add_trace(go.Scatter(
+                x=df_subset['prediction'],
+                y=df_subset['actual'],
+                mode='markers',
+                name=f'{correct_val} (Tüm Coinler)',
+                marker=dict(color=colors[correct_val], size=6, opacity=0.5),
+                text=df_subset.apply(lambda r: f"{r['model']}<br>Tarih: {r['timestamp']}<br>Fiyat: ${r['price']:,.2f}", axis=1),
+                hovertemplate='%{text}<br>Tahmin: %{x:.2f}%<br>Gerçek: %{y:.2f}%<extra></extra>',
+                visible=True
+            ))
+        
+        # Add traces for each coin (hidden by default)
+        for coin in coins:
+            df_coin = df_all[df_all['model'] == coin]
+            for correct_val in ['Doğru', 'Yanlış']:
+                df_subset = df_coin[df_coin['correct'] == correct_val]
+                fig.add_trace(go.Scatter(
+                    x=df_subset['prediction'],
+                    y=df_subset['actual'],
+                    mode='markers',
+                    name=f'{correct_val}',
+                    marker=dict(color=colors[correct_val], size=8, opacity=0.7),
+                    text=df_subset.apply(lambda r: f"Tarih: {r['timestamp']}<br>Fiyat: ${r['price']:,.2f}", axis=1),
+                    hovertemplate='%{text}<br>Tahmin: %{x:.2f}%<br>Gerçek: %{y:.2f}%<extra></extra>',
+                    visible=False
+                ))
+        
+        # Create dropdown buttons
+        buttons = [
+            dict(
+                label='🌐 TÜM COİNLER',
+                method='update',
+                args=[{'visible': [True, True] + [False] * (len(coins) * 2)},
+                      {'title': f'🔍 Tüm Coinler - Prediction vs Actual | Zoom için sürükle!'}]
+            )
+        ]
+        
+        for i, coin in enumerate(coins):
+            visibility = [False] * (2 + len(coins) * 2)
+            visibility[2 + i*2] = True  # Doğru
+            visibility[2 + i*2 + 1] = True  # Yanlış
+            
+            # Calculate accuracy for this coin
+            result = next((r for r in self.results if f"{r.coin}_{r.timeframe}" == coin), None)
+            acc = result.accuracy if result else 0
+            
+            buttons.append(dict(
+                label=f'{coin} ({acc:.0f}%)',
+                method='update',
+                args=[{'visible': visibility},
+                      {'title': f'🔍 {coin} - Accuracy: {acc:.1f}% | Zoom için sürükle!'}]
+            ))
+        
+        # Add perfect prediction line
+        max_val = max(abs(df_all['prediction'].max()), abs(df_all['actual'].max()), 
+                      abs(df_all['prediction'].min()), abs(df_all['actual'].min()))
+        fig.add_trace(go.Scatter(
+            x=[-max_val, max_val], y=[-max_val, max_val],
+            mode='lines', name='Mükemmel Tahmin',
+            line=dict(color='gray', dash='dash', width=1),
+            visible=True, showlegend=True
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title=f'🔍 Tüm Coinler - Prediction vs Actual | Zoom için sürükle!',
+            template='plotly_dark',
+            hovermode='closest',
+            dragmode='zoom',
+            updatemenus=[dict(
+                active=0,
+                buttons=buttons,
+                direction='down',
+                showactive=True,
+                x=0.02,
+                xanchor='left',
+                y=1.15,
+                yanchor='top',
+                bgcolor='rgba(50,50,50,0.8)',
+                font=dict(size=11)
+            )],
+            xaxis=dict(title='AI Tahmini (%)', zeroline=True, zerolinecolor='gray'),
+            yaxis=dict(title='Gerçek Dönüş (%)', zeroline=True, zerolinecolor='gray',
+                      scaleanchor='x', scaleratio=1),
+            legend=dict(yanchor='top', y=0.99, xanchor='right', x=0.99),
+            margin=dict(t=100)
+        )
+        
+        fig.add_hline(y=0, line_dash='dash', line_color='gray', opacity=0.5)
+        fig.add_vline(x=0, line_dash='dash', line_color='gray', opacity=0.5)
+        
+        # Save as HTML
+        html_path = output_dir / f"backtest_ALL_COINS_{self.months_back}m_{timestamp}_interactive.html"
+        fig.write_html(str(html_path), config={'scrollZoom': True, 'displayModeBar': True}, include_plotlyjs='cdn')
+        
+        print(f"🔍 Combined interactive chart saved to: {html_path}")
+        print(f"   📌 Tarayıcıda aç: file:///{html_path}")
 
 
 # ============================================
@@ -1286,31 +2060,56 @@ Examples:
         help='Grid levels for strategy comparison (default: 2)'
     )
     
+    parser.add_argument(
+        '--enhanced',
+        action='store_true',
+        help='Test enhanced models (from enhanced_models/ directory) instead of or alongside original models'
+    )
+    
+    parser.add_argument(
+        '--enhanced-only',
+        action='store_true',
+        help='Test ONLY enhanced models (excludes original kaggle_outputs models)'
+    )
+    
     args = parser.parse_args()
     
     print("\n" + "=" * 60)
     print("🔬 AI MODEL BACKTESTER (Auto All-Models)")
     print("=" * 60)
     
+    # Determine enhanced mode from args
+    use_enhanced = getattr(args, 'enhanced', False) or getattr(args, 'enhanced_only', False)
+    enhanced_only = getattr(args, 'enhanced_only', False)
+    
     # Discover available models
-    models = discover_models()
+    models = discover_models(include_enhanced=use_enhanced, enhanced_only=enhanced_only)
+    
+    # Separate enhanced and original models for display
+    enhanced_models = [m for m in models if m.get('enhanced', False)]
+    original_models = [m for m in models if not m.get('enhanced', False)]
+    
     coins = sorted(set(m['coin'] for m in models))
     timeframes = sorted(set(m['timeframe'] for m in models))
     
-    print(f"   Available models: {len(models)}")
+    print(f"   Available models: {len(models)} ({len(original_models)} original, {len(enhanced_models)} enhanced)")
     print(f"   Coins: {', '.join(coins)}")
     print(f"   Timeframes: {', '.join(timeframes)}")
     print(f"   Device: {DEVICE}")
+    if use_enhanced:
+        print(f"   Mode: {'ENHANCED ONLY' if enhanced_only else 'BOTH (Original + Enhanced)'}")
     print("=" * 60)
     
     # Single model mode
     if args.coin and args.timeframe:
-        print(f"\n🎯 Single Model Mode: {args.coin.upper()} / {args.timeframe}")
+        mode_str = "[ENHANCED]" if use_enhanced else "[ORIGINAL]"
+        print(f"\n🎯 Single Model Mode: {args.coin.upper()} / {args.timeframe} {mode_str}")
         
         backtester = Backtester(
             coin=args.coin,
             timeframe=args.timeframe,
-            months_back=args.months
+            months_back=args.months,
+            use_enhanced=use_enhanced
         )
         
         # Strategy comparison mode

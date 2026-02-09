@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: TRX / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 3856
+Accuracy: 46.35%
+Avg Prediction: 1.5055%
+Avg Actual Return: -0.0006%
+Cumulative Return: -2.72%
+Max Drawdown: 13.77%
+Sharpe Ratio: -0.49
+Profit Factor: 0.99

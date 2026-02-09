@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: OP / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4235
+Accuracy: 50.90%
+Avg Prediction: 3.6055%
+Avg Actual Return: -0.0083%
+Cumulative Return: 21.65%
+Max Drawdown: 51.03%
+Sharpe Ratio: 0.91
+Profit Factor: 1.01

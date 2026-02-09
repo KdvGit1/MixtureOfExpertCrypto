@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: LTC / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4345
+Accuracy: 52.22%
+Avg Prediction: 2.7938%
+Avg Actual Return: -0.0068%
+Cumulative Return: 67.02%
+Max Drawdown: 18.92%
+Sharpe Ratio: 3.87
+Profit Factor: 1.07

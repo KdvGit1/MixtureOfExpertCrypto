@@ -35,7 +35,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Dict, List, Tuple
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from collections import OrderedDict
 from functools import lru_cache
 
@@ -135,6 +135,16 @@ class BotConfig:
     # Grid Trading (Spot only)
     grid_enabled: bool = True           # Enable grid/DCA mode for spot
     grid_levels: int = 2                # Number of grid levels (2-4)
+    
+    # Fear & Greed Index Filter (Futures only)
+    fear_greed_filter_enabled: bool = False  # Toggle via /fearfilter command
+    
+    # Minimum prediction threshold (skip weak signals)
+    # |ai_prediction| < min_prediction_pct will be rejected
+    min_prediction_pct: float = 10.0  # Skip trades where model predicts < 10% move
+    
+    # Take-profit multiplier (set TP at 80% of expected profit for higher success rate)
+    tp_multiplier: float = 0.80  # TP = expected_profit × 0.80
     
     def get_grid_allocations(self) -> list:
         """Get buy allocation percentages for each grid level (decreasing)."""
@@ -502,6 +512,10 @@ class TelegramAutoTradingBot:
         self.safety_paused: bool = False
         self.safety_alert_sent: bool = False  # Prevent spam
         self.last_reset_date: Optional[datetime] = None
+        
+        # Fear & Greed Index tracking
+        self.fear_greed_index: int = 50  # Default neutral
+        self.last_fear_greed_update: Optional[datetime] = None
     
     # ========== TELEGRAM HANDLERS ==========
     
@@ -629,6 +643,7 @@ Komutlar: /help
 • Günlük P&L: {self.daily_pnl_pct:+.2f}% (Limit: {self.config.daily_loss_limit_pct}%)
 • Trade: {self.daily_trades}/{self.config.max_daily_trades}
 • Güven Eşiği: %{self.config.min_confidence_threshold:.0f}
+• Fear Filter: {'✅ Açık' if self.config.fear_greed_filter_enabled else '❌ Kapalı'} (Index: {self.fear_greed_index})
 
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>📈 Açık Pozisyonlar ({long_count} LONG, {short_count} SHORT)</b>
@@ -735,6 +750,16 @@ Komutlar: /help
 
 <b>Diğer:</b>
 /config confidence 30 - Güven eşiği %30
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>🛡️ FEAR & GREED FİLTRESİ</b>
+━━━━━━━━━━━━━━━━━━━━━━
+/fearfilter - Fear filtresi aç/kapat
+/fearfilter status - Fear index göster
+
+• Fear &lt; 20: LONG engellenir (sadece SHORT)
+• Greed &gt; 80: SHORT engellenir (sadece LONG)
+• Sadece Futures modunda çalışır
 
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>✨ ÖZELLİKLER</b>
@@ -1706,7 +1731,75 @@ Tüm pozisyonlar Binance ile uyumlu."""
         
         await update.message.reply_text(msg.strip(), parse_mode='HTML')
     
+    async def cmd_fearfilter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /fearfilter command - Toggle Fear & Greed filter for futures."""
+        args = context.args
+        
+        # Status query
+        if args and args[0].lower() == 'status':
+            fear_index = self.get_fear_greed_index()
+            
+            # Determine market sentiment
+            if fear_index < 20:
+                sentiment = "🔴 Extreme Fear"
+            elif fear_index < 40:
+                sentiment = "🟠 Fear"
+            elif fear_index < 60:
+                sentiment = "🟡 Neutral"
+            elif fear_index < 80:
+                sentiment = "🟢 Greed"
+            else:
+                sentiment = "🟢 Extreme Greed"
+            
+            msg = f"""
+🛡️ <b>Fear &amp; Greed Filter Durumu</b>
+
+📊 <b>Fear &amp; Greed Index:</b> {fear_index}
+📈 <b>Piyasa:</b> {sentiment}
+
+⚙️ <b>Filtre:</b> {'✅ Açık' if self.config.fear_greed_filter_enabled else '❌ Kapalı'}
+
+<b>Filtre Kuralları (Futures):</b>
+• Fear &lt; 20: LONG engellenir, sadece SHORT
+• Greed &gt; 80: SHORT engellenir, sadece LONG
+"""
+            await update.message.reply_text(msg.strip(), parse_mode='HTML')
+            return
+        
+        # Toggle filter
+        self.config.fear_greed_filter_enabled = not self.config.fear_greed_filter_enabled
+        
+        if self.config.fear_greed_filter_enabled:
+            fear_index = self.get_fear_greed_index()
+            msg = f"""
+🛡️ <b>Fear &amp; Greed Filter AÇIK</b>
+
+📊 Güncel Index: {fear_index}
+
+⚙️ <b>Aktif Kurallar:</b>
+• Fear &lt; 20: LONG engellenir
+• Greed &gt; 80: SHORT engellenir
+• Sadece Futures modunda çalışır
+
+Kapatmak için: /fearfilter
+Detay için: /fearfilter status
+"""
+        else:
+            msg = """
+❌ <b>Fear &amp; Greed Filter KAPALI</b>
+
+Tüm sinyaller normal şekilde işlenecek.
+
+Açmak için: /fearfilter
+"""
+        
+        await update.message.reply_text(msg.strip(), parse_mode='HTML')
+        await self.send_notification(f"🛡️ Fear Filter: {'AÇIK' if self.config.fear_greed_filter_enabled else 'KAPALI'}")
+        self.logger.info(f"Fear & Greed filter: {self.config.fear_greed_filter_enabled}")
+
+    
     # ========== NOTIFICATIONS ==========
+
     
     async def send_notification(self, message: str):
         """Send a message to Telegram."""
@@ -2006,6 +2099,23 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         
                         closed_on_exchange.append(coin)
                         
+                        # Cancel any remaining TP/SL orders for this coin
+                        if self.config.trading_mode == 'futures' and not self.config.dry_run:
+                            try:
+                                symbol = f"{coin}/USDT:USDT"
+                                open_orders = self.exchange.fetch_open_orders(symbol)
+                                cancelled_count = 0
+                                for order in open_orders:
+                                    order_type = order.get('type', '').lower()
+                                    if order_type in ['stop_market', 'take_profit_market', 'stop', 'take_profit']:
+                                        self.exchange.cancel_order(order['id'], symbol)
+                                        cancelled_count += 1
+                                        self.logger.info(f"🗑️ Senkron: {order_type} emri iptal: {coin}")
+                                if cancelled_count > 0:
+                                    self.logger.info(f"🗑️ {cancelled_count} TP/SL emri iptal edildi: {coin}")
+                            except Exception as e:
+                                self.logger.warning(f"Senkron emir iptal hatası {coin}: {e}")
+                        
                         # Send notification
                         pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
                         await self.send_notification(
@@ -2215,7 +2325,38 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
 """
         await self.send_notification(msg.strip())
     
+    def get_fear_greed_index(self) -> int:
+        """
+        Fetch current Fear & Greed Index from alternative.me API.
+        Returns value 0-100 (0=Extreme Fear, 100=Extreme Greed).
+        Caches result for 15 minutes.
+        """
+        import requests
+        
+        # Check cache (15 minute expiry)
+        if self.last_fear_greed_update:
+            time_since = (datetime.now() - self.last_fear_greed_update).total_seconds()
+            if time_since < 900:  # 15 minutes
+                return self.fear_greed_index
+        
+        try:
+            response = requests.get(
+                "https://api.alternative.me/fng/",
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if 'data' in data and len(data['data']) > 0:
+                    self.fear_greed_index = int(data['data'][0]['value'])
+                    self.last_fear_greed_update = datetime.now()
+                    self.logger.info(f"📊 Fear & Greed Index güncellendi: {self.fear_greed_index}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Fear & Greed API hatası: {e}")
+        
+        return self.fear_greed_index
+    
     # ========== TRADING LOGIC ==========
+
     
     def should_trade(self, coin: str, prediction: Dict) -> Tuple[str, str]:
         """Decide whether to trade. Supports grid trading for spot mode."""
@@ -2359,15 +2500,49 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if open_count >= self.config.max_positions:
                 return ('HOLD', 'Max pozisyon limiti')
             
+            # ========== FEAR & GREED FILTER (Futures only) ==========
+            if is_futures and self.config.fear_greed_filter_enabled:
+                fear_index = self.get_fear_greed_index()
+                
+                # Extreme Fear (<20): Block LONG, allow SHORT only
+                if fear_index < 20 and pred > threshold:
+                    return ('HOLD', f'🛡️ Fear Filter: Korku={fear_index}, LONG engellendi')
+                
+                # Extreme Greed (>80): Block SHORT, allow LONG only
+                if fear_index > 80 and pred < -threshold:
+                    return ('HOLD', f'🛡️ Fear Filter: Açgözlülük={fear_index}, SHORT engellendi')
+            
             # LONG signal (positive prediction)
             if pred > threshold:
+                # ========== CONFIDENCE FILTER FOR LONG ==========
+                # LONG trades with low confidence (<50%) are too risky
+                if confidence < 50:
+                    return ('HOLD', f'⚠️ LONG için düşük confidence: {confidence:.0f}% < 50%')
+                
+                # ========== MINIMUM PREDICTION FILTER ==========
+                # Skip weak signals where model predicts small moves
+                # For futures: consider leveraged ROE (2% pred × 5x = 10% ROE)
+                pred_pct = pred * 100  # Convert to percentage
+                effective_pct = pred_pct * self.config.leverage if is_futures else pred_pct
+                if effective_pct < self.config.min_prediction_pct:
+                    return ('HOLD', f'⚠️ Zayıf LONG sinyali: {pred_pct:.2f}% × {self.config.leverage if is_futures else 1}x = {effective_pct:.2f}% < {self.config.min_prediction_pct}% eşiği')
+                
                 if is_spot_grid:
                     return ('GRID_BUY', f'📈 Grid Başlat 1/{self.config.grid_levels}: +{pred*100:.3f}%')
                 return ('BUY', f'📈 Yükseliş: +{pred*100:.3f}%')
             
             # SHORT signal (negative prediction, futures only)
             if is_futures and pred < -threshold:
+                # ========== MINIMUM PREDICTION FILTER ==========
+                # Skip weak signals where model predicts small moves
+                # Consider leveraged ROE for futures
+                pred_pct = abs(pred * 100)  # Convert to percentage (absolute)
+                effective_pct = pred_pct * self.config.leverage
+                if effective_pct < self.config.min_prediction_pct:
+                    return ('HOLD', f'⚠️ Zayıf SHORT sinyali: {pred_pct:.2f}% × {self.config.leverage}x = {effective_pct:.2f}% < {self.config.min_prediction_pct}% eşiği')
+                
                 return ('SHORT', f'📉 Düşüş: {pred*100:.3f}%')
+
             
             # Debug: why no signal?
             self.logger.info(f"   [DEBUG] {coin}: pred={pred*100:.3f}%, thr={threshold*100:.3f}%, futures={is_futures}")
@@ -2415,6 +2590,46 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             
             if not self.config.dry_run:
                 self.exchange.create_market_buy_order(symbol, amount)
+                
+                # ========== BINANCE TP/SL ORDERS (Futures only) ==========
+                # Place stop-loss and take-profit orders on Binance
+                # This protects position even if bot doesn't check for 15 minutes
+                if is_futures:
+                    try:
+                        leverage = self.config.leverage
+                        pred_pct = abs(prediction['prediction_pct'])
+                        
+                        # Calculate TP/SL prices
+                        # SL: -20% ROE / leverage = price move
+                        sl_pct = abs(self.config.futures_sl_pct) / leverage / 100
+                        sl_price = price * (1 - sl_pct)  # LONG: SL is below entry
+                        
+                        # TP: min(prediction, 20% ROE) / leverage = price move
+                        # Apply tp_multiplier (0.80) to make TP more achievable
+                        tp_pct = min(pred_pct, self.config.futures_tp_pct) / leverage / 100
+                        tp_pct *= self.config.tp_multiplier  # e.g. 9% → 7.2%
+                        tp_price = price * (1 + tp_pct)  # LONG: TP is above entry
+                        
+                        # Round prices to appropriate precision
+                        sl_price = float(Decimal(str(sl_price)).quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
+                        tp_price = float(Decimal(str(tp_price)).quantize(Decimal('0.00001'), rounding=ROUND_UP))
+                        
+                        # Place stop-loss order
+                        self.exchange.create_order(
+                            symbol, 'STOP_MARKET', 'sell', amount, None,
+                            {'stopPrice': sl_price, 'reduceOnly': True}
+                        )
+                        self.logger.info(f"🛑 SL Order: {coin} @ ${sl_price:,.5f}")
+                        
+                        # Place take-profit order
+                        self.exchange.create_order(
+                            symbol, 'TAKE_PROFIT_MARKET', 'sell', amount, None,
+                            {'stopPrice': tp_price, 'reduceOnly': True}
+                        )
+                        self.logger.info(f"🎯 TP Order: {coin} @ ${tp_price:,.5f}")
+                        
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ TP/SL order error for {coin}: {e}")
             
             # Update position
             pos = self.positions[coin]
@@ -2478,6 +2693,22 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.info(f"📉 SELL {coin}: {amount:.6f} @ ${price:,.5f} ({pnl_pct:+.2f}%)")
             
             if not self.config.dry_run:
+                # Cancel any pending TP/SL orders first
+                if self.config.trading_mode == 'futures':
+                    try:
+                        # Fetch all open orders (including conditional like STOP_MARKET)
+                        open_orders = self.exchange.fetch_open_orders(symbol)
+                        for order in open_orders:
+                            try:
+                                self.exchange.cancel_order(order['id'], symbol)
+                                self.logger.info(f"🗑️ Emir iptal: {order['type']} @ {order.get('stopPrice', order.get('price', 'N/A'))}")
+                            except Exception as cancel_err:
+                                self.logger.warning(f"⚠️ Tekil iptal hatası: {cancel_err}")
+                        if open_orders:
+                            self.logger.info(f"🗑️ {len(open_orders)} TP/SL emri iptal edildi: {coin}")
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ Emir iptal hatası: {e}")
+                
                 self.exchange.create_market_sell_order(symbol, amount)
             
             # Update stats
@@ -2737,6 +2968,22 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.info(f"📉 SELL ALL {coin}: {amount:.6f} @ ${price:,.5f} ({pnl_pct:+.2f}%)")
             
             if not self.config.dry_run:
+                # Cancel any pending TP/SL orders first (if futures)
+                if self.config.trading_mode == 'futures':
+                    try:
+                        futures_symbol = f"{coin}/USDT:USDT"
+                        open_orders = self.exchange.fetch_open_orders(futures_symbol)
+                        for order in open_orders:
+                            try:
+                                self.exchange.cancel_order(order['id'], futures_symbol)
+                                self.logger.info(f"🗑️ Emir iptal: {order['type']} @ {order.get('stopPrice', order.get('price', 'N/A'))}")
+                            except Exception as cancel_err:
+                                self.logger.warning(f"⚠️ Tekil iptal hatası: {cancel_err}")
+                        if open_orders:
+                            self.logger.info(f"🗑️ {len(open_orders)} TP/SL emri iptal edildi: {coin}")
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ Emir iptal hatası: {e}")
+                
                 self.exchange.create_market_sell_order(symbol, amount)
             
             # Update stats
@@ -2950,6 +3197,45 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             
             if not self.config.dry_run:
                 self.exchange.create_market_sell_order(symbol, amount)
+                
+                # ========== BINANCE TP/SL ORDERS FOR SHORT ==========
+                # Place stop-loss and take-profit orders on Binance
+                # This protects position even if bot doesn't check for 15 minutes
+                try:
+                    leverage = self.config.leverage
+                    pred_pct = abs(prediction['prediction_pct'])
+                    
+                    # Calculate TP/SL prices for SHORT
+                    # SL: +20% ROE / leverage = price move UP (SHORT loses when price goes up)
+                    sl_pct = abs(self.config.futures_sl_pct) / leverage / 100
+                    sl_price = price * (1 + sl_pct)  # SHORT: SL is above entry
+                    
+                    # TP: min(prediction, 20% ROE) / leverage = price move DOWN
+                    # Apply tp_multiplier (0.80) to make TP more achievable
+                    tp_pct = min(pred_pct, self.config.futures_tp_pct) / leverage / 100
+                    tp_pct *= self.config.tp_multiplier  # e.g. 9% → 7.2%
+                    tp_price = price * (1 - tp_pct)  # SHORT: TP is below entry
+                    
+                    # Round prices to appropriate precision
+                    sl_price = float(Decimal(str(sl_price)).quantize(Decimal('0.00001'), rounding=ROUND_UP))
+                    tp_price = float(Decimal(str(tp_price)).quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
+                    
+                    # Place stop-loss order (buy back to close short)
+                    self.exchange.create_order(
+                        symbol, 'STOP_MARKET', 'buy', amount, None,
+                        {'stopPrice': sl_price, 'reduceOnly': True}
+                    )
+                    self.logger.info(f"🛑 SL Order (SHORT): {coin} @ ${sl_price:,.5f}")
+                    
+                    # Place take-profit order (buy back to close short)
+                    self.exchange.create_order(
+                        symbol, 'TAKE_PROFIT_MARKET', 'buy', amount, None,
+                        {'stopPrice': tp_price, 'reduceOnly': True}
+                    )
+                    self.logger.info(f"🎯 TP Order (SHORT): {coin} @ ${tp_price:,.5f}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"⚠️ TP/SL order error for {coin} SHORT: {e}")
             
             # Update position
             pos = self.positions[coin]
@@ -3046,6 +3332,20 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.info(f"📈 CLOSE SHORT {coin}: {amount:.6f} @ ${price:,.5f} ({pnl_pct:+.2f}%)")
             
             if not self.config.dry_run:
+                # Cancel any pending TP/SL orders first
+                try:
+                    open_orders = self.exchange.fetch_open_orders(symbol)
+                    for order in open_orders:
+                        try:
+                            self.exchange.cancel_order(order['id'], symbol)
+                            self.logger.info(f"🗑️ Emir iptal: {order['type']} @ {order.get('stopPrice', order.get('price', 'N/A'))}")
+                        except Exception as cancel_err:
+                            self.logger.warning(f"⚠️ Tekil iptal hatası: {cancel_err}")
+                    if open_orders:
+                        self.logger.info(f"🗑️ {len(open_orders)} TP/SL emri iptal edildi: {coin}")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Emir iptal hatası: {e}")
+                
                 self.exchange.create_market_buy_order(symbol, amount)
             
             # Update stats
@@ -3385,6 +3685,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         self.telegram_app.add_handler(CommandHandler("grid", self.cmd_grid))
         self.telegram_app.add_handler(CommandHandler("close", self.cmd_close))
         self.telegram_app.add_handler(CommandHandler("sync", self.cmd_sync))
+        self.telegram_app.add_handler(CommandHandler("fearfilter", self.cmd_fearfilter))
         
         # Start Telegram
         await self.telegram_app.initialize()

@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: INJ / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4605
+Accuracy: 55.35%
+Avg Prediction: -9.2299%
+Avg Actual Return: -0.0093%
+Cumulative Return: 28.40%
+Max Drawdown: 58.00%
+Sharpe Ratio: 1.18
+Profit Factor: 1.02

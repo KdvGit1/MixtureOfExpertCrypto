@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: BNB / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4371
+Accuracy: 52.54%
+Avg Prediction: 3.2535%
+Avg Actual Return: -0.0043%
+Cumulative Return: 17.78%
+Max Drawdown: 23.95%
+Sharpe Ratio: 1.35
+Profit Factor: 1.02

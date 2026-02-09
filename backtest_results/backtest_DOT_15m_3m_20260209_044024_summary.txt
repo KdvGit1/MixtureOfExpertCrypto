@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: DOT / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 3965
+Accuracy: 47.66%
+Avg Prediction: 11.2829%
+Avg Actual Return: -0.0091%
+Cumulative Return: -12.76%
+Max Drawdown: 45.88%
+Sharpe Ratio: -0.61
+Profit Factor: 0.99

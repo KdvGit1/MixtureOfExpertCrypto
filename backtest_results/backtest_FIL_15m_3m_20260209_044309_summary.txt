@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: FIL / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4266
+Accuracy: 51.27%
+Avg Prediction: 5.0000%
+Avg Actual Return: -0.0098%
+Cumulative Return: 53.50%
+Max Drawdown: 33.86%
+Sharpe Ratio: 2.23
+Profit Factor: 1.04

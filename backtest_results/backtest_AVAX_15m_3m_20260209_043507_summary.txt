@@ -1,0 +1,15 @@
+BACKTEST SUMMARY: AVAX / 15m
+==================================================
+
+Period: 3 months
+Total Candles: 8441
+Total Predictions: 8320
+
+Correct Direction: 4054
+Accuracy: 48.73%
+Avg Prediction: 3.3361%
+Avg Actual Return: -0.0064%
+Cumulative Return: -29.37%
+Max Drawdown: 56.69%
+Sharpe Ratio: -1.61
+Profit Factor: 0.97
