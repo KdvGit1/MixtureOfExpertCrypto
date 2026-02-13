@@ -103,8 +103,8 @@ class BotConfig:
     
     # Thresholds
     prediction_threshold: float = 0.003  # 0.30%
-    prediction_scale: float = 0.5
-    min_profit_to_exit: float = 0.0025
+    prediction_scale: float = 0.80  # TP hedef çarpanı (backtest tp_multiplier ile aynı)
+    min_profit_to_exit: float = 0.03  # 3% min profit to exit (pozisyondan erken çıkmayı engeller)
     stop_loss_pct: float = -0.05  # Legacy - now use spot/futures specific
     min_confidence_threshold: float = 25.0  # Minimum confidence % to open trade
     
@@ -141,10 +141,40 @@ class BotConfig:
     
     # Minimum prediction threshold (skip weak signals)
     # |ai_prediction| < min_prediction_pct will be rejected
-    min_prediction_pct: float = 10.0  # Skip trades where model predicts < 10% move
+    min_prediction_pct: float = 10.0  # Skip LONG trades where model predicts < 10% move
+    min_prediction_pct_short: float = 7.0  # Skip SHORT trades where model predicts < 7% move (models have LONG bias)
     
     # Take-profit multiplier (set TP at 80% of expected profit for higher success rate)
     tp_multiplier: float = 0.80  # TP = expected_profit × 0.80
+    
+    # ========== HOUR FILTER (Saat Filtresi) ==========
+    # Zararlı saatlerde işlem açmayı engelle
+    hour_filter_enabled: bool = False  # /hours on|off ile aç/kapa
+    blocked_hours: List[int] = field(default_factory=lambda: [9, 10, 11, 17, 18])  # Zarar eden saatler
+    
+    # ========== TRAILING STOP-LOSS ==========
+    # Kar artınca SL'yi yukarı taşı
+    trailing_sl_enabled: bool = True
+    trailing_activation_pct: float = 3.0   # %3 ROE kârdan sonra aktif
+    trailing_distance_pct: float = 1.0     # Güncel fiyattan %1.0 geride kal (daha sıkı koruma)
+    
+    # ========== SMART EXIT (Akıllı Çıkış) ==========
+    # Ters sinyal geldiğinde çıkmadan önce sinyalin gücünü kontrol et
+    # LONG kapatmak için SHORT sinyali: confidence >= 30% VE effective_move >= 5%
+    exit_signal_strength_short: float = 30.0   # SHORT sinyali min confidence
+    # SHORT kapatmak için LONG sinyali: confidence >= 70% VE effective_move >= 5%
+    exit_signal_strength_long: float = 70.0    # LONG sinyali min confidence
+    exit_min_effective_move: float = 5.0       # Min beklenen hareket % (leverage dahil)
+    
+    # ========== MAX HOLD DURATION ==========
+    max_hold_minutes: int = 0  # 0 = disabled, otherwise close after X minutes
+    
+    # ========== META-MODEL GATE ==========
+    meta_model_enabled: bool = True    # Meta-model trade filtresi
+    meta_model_threshold: float = 0.50  # Minimum karlılık olasılığı
+    
+    # ========== SL COOLDOWN ==========
+    sl_cooldown_candles: int = 16  # SL sonrası bekleme (16 mum = 4 saat, 15dk mumlar)
     
     def get_grid_allocations(self) -> list:
         """Get buy allocation percentages for each grid level (decreasing)."""
@@ -317,6 +347,9 @@ class Position:
     # Futures signal confirmation
     opposite_signal_count: int = 0   # Count of consecutive opposite signals
     
+    # Trailing stop-loss (spot grid)
+    trailing_sl_price: float = 0.0   # Current trailing SL price level
+    
     def __post_init__(self):
         if self.grid_entries is None:
             self.grid_entries = []
@@ -337,6 +370,7 @@ class Position:
         self.total_invested = 0.0
         self.last_grid_time = None
         self.opposite_signal_count = 0  # Reset signal counter too
+        self.trailing_sl_price = 0.0    # Reset trailing SL
     
     def pnl_pct(self, current_price: float) -> float:
         """Calculate P&L percentage."""
@@ -490,6 +524,11 @@ class TelegramAutoTradingBot:
         self.total_trades: int = 0
         self.daily_trades: int = 0
         
+        # IP monitoring
+        self.last_known_ip: str = ''
+        self.ip_check_interval: int = 60  # Check IP every 60 seconds
+        self._last_ip_check: float = 0.0
+        
         # Trade history - support multi-user directories
         user_history_dir = os.environ.get('BOT_HISTORY_DIR')
         if user_history_dir:
@@ -507,6 +546,21 @@ class TelegramAutoTradingBot:
         # Pending trades (for tracking entry info until exit)
         self.pending_trades: Dict[str, Dict] = {}
         
+        # Meta-model gate
+        self.meta_gate = None
+        if self.config.meta_model_enabled:
+            try:
+                from meta_model_gate import MetaModelGate
+                self.meta_gate = MetaModelGate(threshold=self.config.meta_model_threshold)
+                if self.meta_gate.load():
+                    self.logger.info("🧠 Meta-model gate yüklendi")
+                else:
+                    self.meta_gate = None
+                    self.logger.info("⚠️ Meta-model bulunamadı, gate devre dışı")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Meta-model yüklenemedi: {e}")
+                self.meta_gate = None
+        
         # Daily safety tracking
         self.daily_pnl_pct: float = 0.0
         self.safety_paused: bool = False
@@ -516,6 +570,10 @@ class TelegramAutoTradingBot:
         # Fear & Greed Index tracking
         self.fear_greed_index: int = 50  # Default neutral
         self.last_fear_greed_update: Optional[datetime] = None
+        
+        # SL Cooldown per-coin
+        self.sl_cooldown_until: Dict[str, Optional[datetime]] = {coin: None for coin in SUPPORTED_COINS}
+        self.sl_cooldown_blocked: int = 0  # Total signals blocked by cooldown
     
     # ========== TELEGRAM HANDLERS ==========
     
@@ -550,6 +608,85 @@ Komutlar: /help
         self.is_running = False
         await update.message.reply_text("⛔ Bot duraklatıldı. Tekrar başlatmak için /start")
         self.logger.info("⛔ Bot stopped via Telegram")
+    
+    def _cancel_all_orders(self, symbol: str):
+        """Cancel ALL open orders (including conditional STOP_MARKET/TAKE_PROFIT_MARKET).
+        Uses Binance cancel_all_orders API for maximum reliability."""
+        try:
+            # Method 1: cancel_all_orders (single API call, most reliable)
+            # Maps to DELETE /fapi/v1/allOpenOrders
+            self.exchange.cancel_all_orders(symbol)
+            self.logger.info(f"🗑️ Tüm emirler iptal edildi: {symbol}")
+        except AttributeError:
+            # Method 2: Fallback — fetch + cancel individually
+            try:
+                open_orders = self.exchange.fetch_open_orders(symbol)
+                for order in open_orders:
+                    try:
+                        self.exchange.cancel_order(order['id'], symbol)
+                        self.logger.info(f"🗑️ Emir iptal: {order.get('type', '?')} #{order['id']}")
+                    except Exception as cancel_err:
+                        self.logger.warning(f"⚠️ Tekil iptal hatası: {cancel_err}")
+                if open_orders:
+                    self.logger.info(f"🗑️ {len(open_orders)} emir iptal edildi: {symbol}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Emir iptal hatası: {e}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ cancel_all_orders hatası: {e}")
+    
+    def _get_public_ip(self) -> str:
+        """Get public IP address."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['curl', '-s', '--max-time', '5', 'https://ipecho.net/plain'],
+                capture_output=True, text=True, timeout=10
+            )
+            return result.stdout.strip() if result.returncode == 0 else 'N/A'
+        except Exception:
+            return 'N/A'
+    
+    def _get_system_stats(self) -> str:
+        """Get CPU, RAM, uptime and IP for /status command."""
+        try:
+            import psutil
+            cpu_pct = psutil.cpu_percent(interval=0.5)
+            ram = psutil.virtual_memory()
+            ram_used = ram.used / (1024**3)
+            ram_total = ram.total / (1024**3)
+            ram_pct = ram.percent
+            
+            # CPU temperature (Raspberry Pi)
+            try:
+                temps = psutil.sensors_temperatures()
+                cpu_temp = temps.get('cpu_thermal', [{}])[0].current if 'cpu_thermal' in temps else None
+                temp_text = f"\n• Sıcaklık: {cpu_temp:.0f}°C" if cpu_temp else ""
+            except Exception:
+                temp_text = ""
+            
+            # Uptime
+            import time
+            uptime_secs = time.time() - psutil.boot_time()
+            days = int(uptime_secs // 86400)
+            hours = int((uptime_secs % 86400) // 3600)
+            mins = int((uptime_secs % 3600) // 60)
+            uptime_text = f"{days}g {hours}s {mins}dk" if days > 0 else f"{hours}s {mins}dk"
+            
+            # Public IP
+            ip = self.last_known_ip or self._get_public_ip()
+            if ip != 'N/A':
+                self.last_known_ip = ip
+            
+            return (
+                f"• CPU: {cpu_pct:.0f}%\n"
+                f"• RAM: {ram_used:.1f}/{ram_total:.1f} GB ({ram_pct:.0f}%){temp_text}\n"
+                f"• Uptime: {uptime_text}\n"
+                f"• Public IP: {ip}"
+            )
+        except ImportError:
+            return "• psutil yüklü değil (pip install psutil)"
+        except Exception as e:
+            return f"• Sistem bilgisi alınamadı: {e}"
     
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /status command."""
@@ -623,7 +760,7 @@ Komutlar: /help
         short_count = sum(1 for p in self.positions.values() if p.side == "SHORT")
         
         # Escape special chars for HTML
-        safety_msg = safety_msg.replace("<", "&lt;").replace(">", "&gt;")
+        safety_msg = safety_msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         
         msg = f"""
 📊 <b>Bot Durumu</b>
@@ -646,6 +783,20 @@ Komutlar: /help
 • Fear Filter: {'✅ Açık' if self.config.fear_greed_filter_enabled else '❌ Kapalı'} (Index: {self.fear_greed_index})
 
 ━━━━━━━━━━━━━━━━━━━━━━
+<b>🕐 Saat Filtresi</b>
+━━━━━━━━━━━━━━━━━━━━━━
+• Durum: {'✅ Açık' if self.config.hour_filter_enabled else '❌ Kapalı'}
+• Şu an: {datetime.now().hour:02d}:00 ({'🚫 Engelli' if datetime.now().hour in self.config.blocked_hours and self.config.hour_filter_enabled else '✅ İzinli'})
+• Engelli Saatler: {', '.join(f'{h:02d}:00' for h in sorted(self.config.blocked_hours)) if self.config.blocked_hours else 'Yok'}
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>⏳ SL Cooldown</b>
+━━━━━━━━━━━━━━━━━━━━━━
+• Süre: {self.config.sl_cooldown_candles} mum ({self.config.sl_cooldown_candles * 15}dk)
+• Engellenen: {self.sl_cooldown_blocked} sinyal
+• Aktif: {', '.join(f'{c} ({int((t - datetime.now()).total_seconds() / 60)}dk)' for c, t in self.sl_cooldown_until.items() if t and t > datetime.now()) or 'Yok'}
+
+━━━━━━━━━━━━━━━━━━━━━━
 <b>📈 Açık Pozisyonlar ({long_count} LONG, {short_count} SHORT)</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 {positions_text}
@@ -656,6 +807,11 @@ Komutlar: /help
 • Toplam Trade: {self.total_trades}
 • Bugün: {self.daily_trades}
 • Kümülatif P&L: {self.cumulative_pnl_pct:+.2f}%
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>🖥️ Sistem</b>
+━━━━━━━━━━━━━━━━━━━━━━
+{self._get_system_stats()}
 
 🔄 Bot: {'✅ Çalışıyor' if self.is_running else '⏸️ Duraklatıldı'}
 """
@@ -760,6 +916,17 @@ Komutlar: /help
 • Fear &lt; 20: LONG engellenir (sadece SHORT)
 • Greed &gt; 80: SHORT engellenir (sadece LONG)
 • Sadece Futures modunda çalışır
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b> Saat FİLTRESİ</b>
+━━━━━━━━━━━━━━━━━━━━━━
+• /hours - Saat filtresi bilgileri
+• /hours on - Filtreyi aç
+• /hours off - Filtreyi kapat
+• /hours add 9 10 - Saat ekle
+• /hours remove 9 - Saat çıkar
+• /hours set 9 10 11 17 18 - Listeyi değiştir
+• /hours reset - Önerilen saatlere dön
 
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>✨ ÖZELLİKLER</b>
@@ -1796,10 +1963,124 @@ Açmak için: /fearfilter
         await update.message.reply_text(msg.strip(), parse_mode='HTML')
         await self.send_notification(f"🛡️ Fear Filter: {'AÇIK' if self.config.fear_greed_filter_enabled else 'KAPALI'}")
         self.logger.info(f"Fear & Greed filter: {self.config.fear_greed_filter_enabled}")
+    
+    async def cmd_hours(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /hours command - Control trading hour filter.
+        
+        /hours - Show status and recommended hours
+        /hours on - Enable hour filter
+        /hours off - Disable hour filter
+        /hours add 9 10 11 - Add hours to blocked list
+        /hours remove 9 - Remove hour from blocked list
+        /hours set 9 10 11 17 18 - Set entire blocked list
+        """
+        args = context.args
+        
+        # Recommended hours based on analysis
+        RECOMMENDED_BLOCKED = [9, 10, 11, 17, 18]
+        PROFITABLE_HOURS = [3, 4, 5, 6, 10]  # From analysis: 03:00-06:00 +$11.78
+        
+        if not args:
+            # Show current status
+            status = "✅ AÇIK" if self.config.hour_filter_enabled else "❌ KAPALI"
+            blocked_str = ", ".join(f"{h:02d}:00" for h in sorted(self.config.blocked_hours)) if self.config.blocked_hours else "Yok"
+            
+            msg = f"""
+🕐 <b>Saat Filtresi</b>
+
+⚙️ <b>Durum:</b> {status}
+🚫 <b>Engelli Saatler:</b> {blocked_str}
+
+📊 <b>Analiz Sonuçları:</b>
+✅ Karlı Saatler: 03:00-06:00 (+$11.78)
+❌ Zararlı Saatler: 09:00-12:00 (-$13.36), 17:00-18:00 (-$11.71)
+
+<b>Komutlar:</b>
+• /hours on - Filtreyi aç
+• /hours off - Filtreyi kapat
+• /hours add 9 10 - Saat ekle
+• /hours remove 9 - Saat çıkar
+• /hours set 9 10 11 17 18 - Listeyi değiştir
+• /hours reset - Önerilen saatlere dön
+"""
+            await update.message.reply_text(msg.strip(), parse_mode='HTML')
+            return
+        
+        cmd = args[0].lower()
+        
+        if cmd == 'on':
+            self.config.hour_filter_enabled = True
+            blocked_str = ", ".join(f"{h:02d}:00" for h in sorted(self.config.blocked_hours))
+            await update.message.reply_text(
+                f"✅ <b>Saat Filtresi AÇIK</b>\n\n🚫 Engelli saatler: {blocked_str}\n\nBu saatlerde yeni pozisyon açılmayacak.",
+                parse_mode='HTML'
+            )
+            self.logger.info(f"Hour filter enabled: {self.config.blocked_hours}")
+            
+        elif cmd == 'off':
+            self.config.hour_filter_enabled = False
+            await update.message.reply_text("❌ <b>Saat Filtresi KAPALI</b>\n\nTüm saatlerde işlem açılabilir.", parse_mode='HTML')
+            self.logger.info("Hour filter disabled")
+            
+        elif cmd == 'add' and len(args) > 1:
+            try:
+                hours_to_add = [int(h) for h in args[1:] if 0 <= int(h) < 24]
+                self.config.blocked_hours = list(set(self.config.blocked_hours + hours_to_add))
+                blocked_str = ", ".join(f"{h:02d}:00" for h in sorted(self.config.blocked_hours))
+                await update.message.reply_text(f"✅ Saatler eklendi.\n\n🚫 Engelli saatler: {blocked_str}", parse_mode='HTML')
+            except ValueError:
+                await update.message.reply_text("❌ Geçersiz saat formatı. Örnek: /hours add 9 10 11")
+                
+        elif cmd == 'remove' and len(args) > 1:
+            try:
+                hours_to_remove = [int(h) for h in args[1:]]
+                self.config.blocked_hours = [h for h in self.config.blocked_hours if h not in hours_to_remove]
+                blocked_str = ", ".join(f"{h:02d}:00" for h in sorted(self.config.blocked_hours)) if self.config.blocked_hours else "Yok"
+                await update.message.reply_text(f"✅ Saatler çıkarıldı.\n\n🚫 Engelli saatler: {blocked_str}", parse_mode='HTML')
+            except ValueError:
+                await update.message.reply_text("❌ Geçersiz saat formatı. Örnek: /hours remove 9")
+                
+        elif cmd == 'set' and len(args) > 1:
+            try:
+                new_hours = [int(h) for h in args[1:] if 0 <= int(h) < 24]
+                self.config.blocked_hours = list(set(new_hours))
+                blocked_str = ", ".join(f"{h:02d}:00" for h in sorted(self.config.blocked_hours)) if self.config.blocked_hours else "Yok"
+                await update.message.reply_text(f"✅ Liste güncellendi.\n\n🚫 Engelli saatler: {blocked_str}", parse_mode='HTML')
+            except ValueError:
+                await update.message.reply_text("❌ Geçersiz saat formatı. Örnek: /hours set 9 10 11 17 18")
+                
+        elif cmd == 'reset':
+            self.config.blocked_hours = RECOMMENDED_BLOCKED.copy()
+            blocked_str = ", ".join(f"{h:02d}:00" for h in sorted(self.config.blocked_hours))
+            await update.message.reply_text(f"✅ Önerilen saatlere sıfırlandı.\n\n🚫 Engelli saatler: {blocked_str}", parse_mode='HTML')
+            
+        else:
+            await update.message.reply_text("❌ Geçersiz komut. /hours yazarak yardım alabilirsin.", parse_mode='HTML')
 
     
     # ========== NOTIFICATIONS ==========
 
+    
+    @staticmethod
+    def _sanitize_html(message: str) -> str:
+        """Escape HTML entities and restore allowed Telegram tags."""
+        import re as _re
+        safe = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        # Restore allowed Telegram HTML tags
+        for tag in ['b', 'i', 'code', 'pre', 'u', 's']:
+            safe = safe.replace(f"&lt;{tag}&gt;", f"<{tag}>")
+            safe = safe.replace(f"&lt;/{tag}&gt;", f"</{tag}>")
+        # Restore <a href="..."> tags
+        safe = _re.sub(r'&lt;a href=&quot;(.+?)&quot;&gt;', r'<a href="\1">', safe)
+        safe = safe.replace("&lt;/a&gt;", "</a>")
+        return safe
+    
+    async def _safe_reply(self, update, message: str):
+        """Reply to Telegram command with HTML-safe message."""
+        await update.message.reply_text(
+            self._sanitize_html(message),
+            parse_mode='HTML'
+        )
     
     async def send_notification(self, message: str):
         """Send a message to Telegram."""
@@ -1810,7 +2091,7 @@ Açmak için: /fearfilter
             bot = Bot(token=self.config.telegram_bot_token)
             await bot.send_message(
                 chat_id=self.config.telegram_chat_id,
-                text=message,
+                text=self._sanitize_html(message),
                 parse_mode='HTML'
             )
         except Exception as e:
@@ -2101,20 +2382,8 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         
                         # Cancel any remaining TP/SL orders for this coin
                         if self.config.trading_mode == 'futures' and not self.config.dry_run:
-                            try:
-                                symbol = f"{coin}/USDT:USDT"
-                                open_orders = self.exchange.fetch_open_orders(symbol)
-                                cancelled_count = 0
-                                for order in open_orders:
-                                    order_type = order.get('type', '').lower()
-                                    if order_type in ['stop_market', 'take_profit_market', 'stop', 'take_profit']:
-                                        self.exchange.cancel_order(order['id'], symbol)
-                                        cancelled_count += 1
-                                        self.logger.info(f"🗑️ Senkron: {order_type} emri iptal: {coin}")
-                                if cancelled_count > 0:
-                                    self.logger.info(f"🗑️ {cancelled_count} TP/SL emri iptal edildi: {coin}")
-                            except Exception as e:
-                                self.logger.warning(f"Senkron emir iptal hatası {coin}: {e}")
+                            symbol = f"{coin}/USDT:USDT"
+                            self._cancel_all_orders(symbol)
                         
                         # Send notification
                         pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
@@ -2249,7 +2518,12 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 'prediction_pct': prediction * 100,
                 'confidence': confidence,
                 'price': current_price,
-                'timestamp': datetime.now()
+                'timestamp': datetime.now(),
+                # Branch predictions for meta-model
+                'pred_cnn': pred_cnn.item() / 100.0 * 100,
+                'pred_lstm': pred_lstm.item() / 100.0 * 100,
+                'pred_tr': pred_tr.item() / 100.0 * 100,
+                'df_display': df_display,
             }
             
         except Exception as e:
@@ -2372,6 +2646,21 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         if confidence < self.config.min_confidence_threshold:
             return ('HOLD', f'Düşük güven: {confidence:.0f}% altinda {self.config.min_confidence_threshold:.0f}%')
         
+        # ========== META-MODEL GATE ==========
+        if self.meta_gate and self.config.meta_model_enabled and pos.side == "FLAT":
+            df_disp = prediction.get('df_display')
+            candle_idx = len(df_disp) - 1 if df_disp is not None else -1
+            allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
+            if not allow:
+                return ('HOLD', f'🧠 Meta-model: düşük karlılık ({prob*100:.0f}% < {self.config.meta_model_threshold*100:.0f}%)')
+        
+        # ========== HOUR FILTER ==========
+        # Block new position entries during blocked hours (existing positions can still be managed)
+        if self.config.hour_filter_enabled and pos.side == "FLAT":
+            current_hour = datetime.now().hour
+            if current_hour in self.config.blocked_hours:
+                return ('HOLD', f'🕐 Saat filtresi: {current_hour:02d}:00 engelli saat')
+        
         # Count open positions (both LONG and SHORT)
         open_count = sum(1 for p in self.positions.values() if p.side in ["LONG", "SHORT"])
         
@@ -2392,6 +2681,32 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             # Stop-loss: sell everything immediately
             if current_pnl <= sl_limit:
                 return ('SELL_ALL', f'🛑 Stop-Loss: {current_pnl*100:.2f}%')
+            
+            # Trailing stop-loss check (soft, in should_trade)
+            if self.config.trailing_sl_enabled and hasattr(pos, 'trailing_sl_price') and pos.trailing_sl_price > 0:
+                if price <= pos.trailing_sl_price:
+                    trail_pnl = ((pos.trailing_sl_price - avg_price) / avg_price) * 100 if avg_price > 0 else 0
+                    return ('SELL_ALL', f'🔒 Trailing SL: {trail_pnl:+.2f}%')
+            
+            # Update trailing SL if profit exceeds activation threshold
+            if self.config.trailing_sl_enabled and current_pnl * 100 >= self.config.trailing_activation_pct:
+                new_sl = price * (1 - self.config.trailing_distance_pct / 100)
+                min_sl = avg_price * 1.002  # At least 0.2% above avg entry
+                if not hasattr(pos, 'trailing_sl_price'):
+                    pos.trailing_sl_price = 0.0
+                if new_sl > min_sl and new_sl > pos.trailing_sl_price:
+                    pos.trailing_sl_price = new_sl
+                    self.logger.info(f"🔒 {coin}: Trailing SL güncellendi: ${new_sl:,.2f} (PnL: {current_pnl*100:+.2f}%)")
+            
+            # ========== SMART EXIT: Bearish + profit in grid mode ==========
+            if pred < 0 and current_pnl >= self.config.min_profit_to_exit:
+                effective_move = abs(pred * 100)
+                signal_strong_enough = (
+                    confidence >= self.config.exit_signal_strength_short and
+                    effective_move >= self.config.exit_min_effective_move
+                )
+                if signal_strong_enough:
+                    return ('SELL_ALL', f'📉 Güçlü Bearish + kâr: {current_pnl*100:+.2f}% (sinyal: {pred*100:.2f}%)')
             
             # Check grid sell targets
             sell_targets = self.config.get_grid_sell_targets()
@@ -2429,6 +2744,28 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if current_pnl <= sl_limit:
                 return ('SELL', f'🛑 Stop-Loss: {current_pnl*100:.2f}%')
             
+            # Trailing stop-loss check (internal)
+            if self.config.trailing_sl_enabled and hasattr(pos, 'trailing_sl_price') and pos.trailing_sl_price > 0:
+                if price <= pos.trailing_sl_price:
+                    trail_pnl = ((pos.trailing_sl_price - pos.entry_price) / pos.entry_price) * 100 * (self.config.leverage if is_futures else 1)
+                    return ('SELL', f'🔒 Trailing SL: {trail_pnl:+.2f}%')
+            
+            # Update trailing SL internally
+            if self.config.trailing_sl_enabled and current_pnl * 100 >= self.config.trailing_activation_pct:
+                distance_factor = self.config.trailing_distance_pct / 100
+                if is_futures:
+                    distance_factor /= self.config.leverage
+                new_sl = price * (1 - distance_factor)
+                min_sl = pos.entry_price * 1.002  # At least 0.2% above entry
+                if not hasattr(pos, 'trailing_sl_price'):
+                    pos.trailing_sl_price = 0.0
+                if new_sl > min_sl and new_sl > pos.trailing_sl_price:
+                    old_sl = pos.trailing_sl_price
+                    pos.trailing_sl_price = new_sl
+                    self.logger.info(f"🔒 {coin}: Trailing SL güncellendi: ${new_sl:,.4f} (was: ${old_sl:,.4f}, ROE: {current_pnl*100:+.2f}%)")
+                    # Notify via Telegram
+                    asyncio.ensure_future(self.send_notification(f"🔒 {coin} Trailing SL: ${new_sl:,.4f} (ROE: {current_pnl*100:+.2f}%)"))
+            
             # Take profit
             target_tp = abs(pos.entry_prediction) if pos.entry_prediction else tp_max
             target_tp = min(target_tp, tp_max)  # Cap TP
@@ -2436,17 +2773,76 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if current_pnl >= target_tp:
                 return ('SELL', f'🎯 Hedef: {current_pnl*100:+.2f}%')
             
-            # Bearish + min profit
+            # ========== SMART EXIT: Bearish + profit ==========
+            # Check if reverse signal is strong enough to close profitable LONG
+            # SHORT signal needs: confidence >= exit_signal_strength_short AND effective_move >= exit_min_effective_move
             if pred < 0 and current_pnl >= self.config.min_profit_to_exit:
-                pos.opposite_signal_count = 0  # Reset on exit
-                return ('SELL', f'📉 Bearish + kâr: {current_pnl*100:+.2f}%')
+                effective_move = abs(pred * 100)
+                signal_strong_enough = (
+                    confidence >= self.config.exit_signal_strength_short and
+                    effective_move >= self.config.exit_min_effective_move
+                )
+                if signal_strong_enough:
+                    pos.opposite_signal_count = 0
+                    # In spot mode, just SELL (no flip to SHORT - spot doesn't support shorting)
+                    if not is_futures:
+                        return ('SELL', f'📉 Güçlü Bearish + kâr: {current_pnl*100:+.2f}% (sinyal: {pred*100:.2f}%, conf: {confidence:.0f}%)')
+                    # ========== FLIP FILTERS: qualify new SHORT ==========
+                    flip_ok = True
+                    flip_reason = ''
+                    # 1) Confidence filter for SHORT (min 20%)
+                    if confidence < 20:
+                        flip_ok = False
+                        flip_reason = f'SHORT conf {confidence:.0f}% < 20%'
+                    # 2) Min prediction filter (raw, no leverage)
+                    elif abs(pred * 100) < self.config.min_prediction_pct_short:
+                        flip_ok = False
+                        flip_reason = f'SHORT pred {abs(pred*100):.2f}% < {self.config.min_prediction_pct_short}%'
+                    # 3) Meta-model gate
+                    elif self.meta_gate and self.config.meta_model_enabled:
+                        df_disp = prediction.get('df_display')
+                        candle_idx = len(df_disp) - 1 if df_disp is not None else -1
+                        allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
+                        if not allow:
+                            flip_ok = False
+                            flip_reason = f'Meta-model {prob*100:.0f}%'
+                    
+                    if flip_ok:
+                        return ('SELL_AND_FLIP', f'📉 Güçlü Bearish + kâr: {current_pnl*100:+.2f}% (sinyal: {pred*100:.2f}%, conf: {confidence:.0f}%)')
+                    else:
+                        self.logger.info(f"📉 {coin}: Flip engellendi ({flip_reason}), sadece SELL")
+                        return ('SELL', f'📉 Güçlü Bearish + kâr: {current_pnl*100:+.2f}% (flip engel: {flip_reason})')
+                else:
+                    # Weak reverse signal - hold position
+                    return ('HOLD', f'📉 Zayıf Bearish, pozisyon korunuyor (sinyal: {pred*100:.2f}%, conf: {confidence:.0f}%, effective: {effective_move:.1f}% < {self.config.exit_min_effective_move}%)')
             
             # FUTURES: Track opposite signals for confirmation
             if is_futures and pred < -threshold and current_pnl < 0:
                 pos.opposite_signal_count += 1
                 if pos.opposite_signal_count >= 2:
                     pos.opposite_signal_count = 0  # Reset on exit
-                    return ('SELL', f'⚠️ 2x ters sinyal çıkış: {current_pnl*100:+.2f}%')
+                    # ========== FLIP FILTERS: qualify new SHORT ==========
+                    flip_ok = True
+                    flip_reason = ''
+                    if confidence < 20:
+                        flip_ok = False
+                        flip_reason = f'SHORT conf {confidence:.0f}% < 20%'
+                    elif abs(pred * 100) < self.config.min_prediction_pct_short:
+                        flip_ok = False
+                        flip_reason = f'SHORT pred {abs(pred*100):.2f}% < {self.config.min_prediction_pct_short}%'
+                    elif self.meta_gate and self.config.meta_model_enabled:
+                        df_disp = prediction.get('df_display')
+                        candle_idx = len(df_disp) - 1 if df_disp is not None else -1
+                        allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
+                        if not allow:
+                            flip_ok = False
+                            flip_reason = f'Meta-model {prob*100:.0f}%'
+                    
+                    if flip_ok:
+                        return ('SELL_AND_FLIP', f'⚠️ 2x ters sinyal + flip: {current_pnl*100:+.2f}%')
+                    else:
+                        self.logger.info(f"⚠️ {coin}: 2x ters sinyal flip engellendi ({flip_reason}), sadece SELL")
+                        return ('SELL', f'⚠️ 2x ters sinyal: {current_pnl*100:+.2f}% (flip engel: {flip_reason})')
                 else:
                     return ('HOLD', f'⚠️ Ters sinyal 1/2 - doğrulama bekleniyor')
             
@@ -2467,6 +2863,26 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if current_pnl <= sl_limit:
                 return ('CLOSE_SHORT', f'🛑 Stop-Loss: {current_pnl*100:.2f}%')
             
+            # Trailing stop-loss check (internal) for SHORT
+            if self.config.trailing_sl_enabled and hasattr(pos, 'trailing_sl_price') and pos.trailing_sl_price > 0:
+                if price >= pos.trailing_sl_price:
+                    trail_pnl = ((pos.entry_price - pos.trailing_sl_price) / pos.entry_price) * 100 * self.config.leverage
+                    return ('CLOSE_SHORT', f'🔒 Trailing SL: {trail_pnl:+.2f}%')
+            
+            # Update trailing SL internally for SHORT
+            if self.config.trailing_sl_enabled and current_pnl * 100 >= self.config.trailing_activation_pct:
+                distance_factor = self.config.trailing_distance_pct / self.config.leverage / 100
+                new_sl = price * (1 + distance_factor)
+                max_sl = pos.entry_price * 0.998  # At least 0.2% below entry
+                if not hasattr(pos, 'trailing_sl_price'):
+                    pos.trailing_sl_price = 0.0
+                if (pos.trailing_sl_price == 0 or new_sl < pos.trailing_sl_price) and new_sl < max_sl:
+                    old_sl = pos.trailing_sl_price
+                    pos.trailing_sl_price = new_sl
+                    self.logger.info(f"🔒 {coin}: SHORT Trailing SL güncellendi: ${new_sl:,.4f} (was: ${old_sl:,.4f}, ROE: {current_pnl*100:+.2f}%)")
+                    # Notify via Telegram
+                    asyncio.ensure_future(self.send_notification(f"🔒 {coin} SHORT Trailing SL: ${new_sl:,.4f} (ROE: {current_pnl*100:+.2f}%)"))
+            
             # Take profit
             target_tp = abs(pos.entry_prediction) if pos.entry_prediction else tp_max
             target_tp = min(target_tp, tp_max)  # Cap TP
@@ -2474,17 +2890,73 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if current_pnl >= target_tp:
                 return ('CLOSE_SHORT', f'🎯 Hedef: {current_pnl*100:+.2f}%')
             
-            # Bullish + min profit (close short when market turns bullish)
+            # ========== SMART EXIT: Bullish + profit ==========
+            # Check if reverse signal is strong enough to close profitable SHORT
+            # LONG signal needs: confidence >= exit_signal_strength_long AND effective_move >= exit_min_effective_move
             if pred > 0 and current_pnl >= self.config.min_profit_to_exit:
-                pos.opposite_signal_count = 0  # Reset on exit
-                return ('CLOSE_SHORT', f'📈 Bullish + kâr: {current_pnl*100:+.2f}%')
+                effective_move = abs(pred * 100)
+                signal_strong_enough = (
+                    confidence >= self.config.exit_signal_strength_long and
+                    effective_move >= self.config.exit_min_effective_move
+                )
+                if signal_strong_enough:
+                    pos.opposite_signal_count = 0
+                    # ========== FLIP FILTERS: qualify new LONG ==========
+                    flip_ok = True
+                    flip_reason = ''
+                    # 1) Confidence filter for LONG (min 80%)
+                    if confidence < 80:
+                        flip_ok = False
+                        flip_reason = f'LONG conf {confidence:.0f}% < 80%'
+                    # 2) Min prediction filter (raw, no leverage)
+                    elif pred * 100 < self.config.min_prediction_pct:
+                        flip_ok = False
+                        flip_reason = f'LONG pred {pred*100:.2f}% < {self.config.min_prediction_pct}%'
+                    # 3) Meta-model gate
+                    elif self.meta_gate and self.config.meta_model_enabled:
+                        df_disp = prediction.get('df_display')
+                        candle_idx = len(df_disp) - 1 if df_disp is not None else -1
+                        allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
+                        if not allow:
+                            flip_ok = False
+                            flip_reason = f'Meta-model {prob*100:.0f}%'
+                    
+                    if flip_ok:
+                        return ('CLOSE_SHORT_AND_FLIP', f'📈 Güçlü Bullish + kâr: {current_pnl*100:+.2f}% (sinyal: {pred*100:.2f}%, conf: {confidence:.0f}%)')
+                    else:
+                        self.logger.info(f"📈 {coin}: Flip engellendi ({flip_reason}), sadece CLOSE_SHORT")
+                        return ('CLOSE_SHORT', f'📈 Güçlü Bullish + kâr: {current_pnl*100:+.2f}% (flip engel: {flip_reason})')
+                else:
+                    # Weak reverse signal - hold position
+                    return ('HOLD', f'📈 Zayıf Bullish, pozisyon korunuyor (sinyal: {pred*100:.2f}%, conf: {confidence:.0f}%, effective: {effective_move:.1f}% < {self.config.exit_min_effective_move}%)')
             
             # Track opposite signals for confirmation (bullish when SHORT)
             if pred > threshold and current_pnl < 0:
                 pos.opposite_signal_count += 1
                 if pos.opposite_signal_count >= 2:
                     pos.opposite_signal_count = 0  # Reset on exit
-                    return ('CLOSE_SHORT', f'⚠️ 2x ters sinyal çıkış: {current_pnl*100:+.2f}%')
+                    # ========== FLIP FILTERS: qualify new LONG ==========
+                    flip_ok = True
+                    flip_reason = ''
+                    if confidence < 80:
+                        flip_ok = False
+                        flip_reason = f'LONG conf {confidence:.0f}% < 80%'
+                    elif pred * 100 < self.config.min_prediction_pct:
+                        flip_ok = False
+                        flip_reason = f'LONG pred {pred*100:.2f}% < {self.config.min_prediction_pct}%'
+                    elif self.meta_gate and self.config.meta_model_enabled:
+                        df_disp = prediction.get('df_display')
+                        candle_idx = len(df_disp) - 1 if df_disp is not None else -1
+                        allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
+                        if not allow:
+                            flip_ok = False
+                            flip_reason = f'Meta-model {prob*100:.0f}%'
+                    
+                    if flip_ok:
+                        return ('CLOSE_SHORT_AND_FLIP', f'⚠️ 2x ters sinyal + flip: {current_pnl*100:+.2f}%')
+                    else:
+                        self.logger.info(f"⚠️ {coin}: 2x ters sinyal flip engellendi ({flip_reason}), sadece CLOSE_SHORT")
+                        return ('CLOSE_SHORT', f'⚠️ 2x ters sinyal: {current_pnl*100:+.2f}% (flip engel: {flip_reason})')
                 else:
                     return ('HOLD', f'⚠️ Ters sinyal 1/2 - doğrulama bekleniyor')
             
@@ -2497,6 +2969,18 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         
         # ========== OPEN NEW POSITION ==========
         if pos.side == "FLAT":
+            # SL Cooldown check
+            if self.config.sl_cooldown_candles > 0:
+                cooldown_end = self.sl_cooldown_until.get(coin)
+                if cooldown_end is not None:
+                    now = datetime.now()
+                    if now < cooldown_end:
+                        self.sl_cooldown_blocked += 1
+                        remaining = (cooldown_end - now).total_seconds() / 60
+                        return ('HOLD', f'⏳ SL Cooldown: {remaining:.0f}dk kaldı')
+                    else:
+                        self.sl_cooldown_until[coin] = None  # Expired
+            
             if open_count >= self.config.max_positions:
                 return ('HOLD', 'Max pozisyon limiti')
             
@@ -2521,11 +3005,10 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 
                 # ========== MINIMUM PREDICTION FILTER ==========
                 # Skip weak signals where model predicts small moves
-                # For futures: consider leveraged ROE (2% pred × 5x = 10% ROE)
+                # Raw prediction % used (no leverage multiply) — matches backtest & meta-model trainer
                 pred_pct = pred * 100  # Convert to percentage
-                effective_pct = pred_pct * self.config.leverage if is_futures else pred_pct
-                if effective_pct < self.config.min_prediction_pct:
-                    return ('HOLD', f'⚠️ Zayıf LONG sinyali: {pred_pct:.2f}% × {self.config.leverage if is_futures else 1}x = {effective_pct:.2f}% < {self.config.min_prediction_pct}% eşiği')
+                if pred_pct < self.config.min_prediction_pct:
+                    return ('HOLD', f'⚠️ Zayıf LONG sinyali: {pred_pct:.2f}% < {self.config.min_prediction_pct}% eşiği')
                 
                 if is_spot_grid:
                     return ('GRID_BUY', f'📈 Grid Başlat 1/{self.config.grid_levels}: +{pred*100:.3f}%')
@@ -2535,11 +3018,11 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if is_futures and pred < -threshold:
                 # ========== MINIMUM PREDICTION FILTER ==========
                 # Skip weak signals where model predicts small moves
-                # Consider leveraged ROE for futures
+                # Raw prediction % used (no leverage multiply) — matches backtest & meta-model trainer
+                # SHORT uses lower threshold (models have LONG bias, SHORT predictions are naturally smaller)
                 pred_pct = abs(pred * 100)  # Convert to percentage (absolute)
-                effective_pct = pred_pct * self.config.leverage
-                if effective_pct < self.config.min_prediction_pct:
-                    return ('HOLD', f'⚠️ Zayıf SHORT sinyali: {pred_pct:.2f}% × {self.config.leverage}x = {effective_pct:.2f}% < {self.config.min_prediction_pct}% eşiği')
+                if pred_pct < self.config.min_prediction_pct_short:
+                    return ('HOLD', f'⚠️ Zayıf SHORT sinyali: {pred_pct:.2f}% < {self.config.min_prediction_pct_short}% eşiği')
                 
                 return ('SHORT', f'📉 Düşüş: {pred*100:.3f}%')
 
@@ -2591,45 +3074,40 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if not self.config.dry_run:
                 self.exchange.create_market_buy_order(symbol, amount)
                 
-                # ========== BINANCE TP/SL ORDERS (Futures only) ==========
-                # Place stop-loss and take-profit orders on Binance
-                # This protects position even if bot doesn't check for 15 minutes
+                # === SAFETY NET: Exchange-level SL/TP orders ===
+                # These protect against bot crash / internet loss
+                # Internal trailing SL can close earlier and will cancel these
                 if is_futures:
                     try:
-                        leverage = self.config.leverage
-                        pred_pct = abs(prediction['prediction_pct'])
+                        prediction_pct = abs(prediction.get('prediction_pct', 0))
+                        tp_pct = min(prediction_pct, self.config.futures_tp_pct) / self.config.leverage / 100
+                        sl_pct = abs(self.config.futures_sl_pct) / self.config.leverage / 100
                         
-                        # Calculate TP/SL prices
-                        # SL: -20% ROE / leverage = price move
-                        sl_pct = abs(self.config.futures_sl_pct) / leverage / 100
-                        sl_price = price * (1 - sl_pct)  # LONG: SL is below entry
+                        sl_price = float(Decimal(str(price * (1 - sl_pct))).quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
+                        tp_price = float(Decimal(str(price * (1 + tp_pct))).quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
                         
-                        # TP: min(prediction, 20% ROE) / leverage = price move
-                        # Apply tp_multiplier (0.80) to make TP more achievable
-                        tp_pct = min(pred_pct, self.config.futures_tp_pct) / leverage / 100
-                        tp_pct *= self.config.tp_multiplier  # e.g. 9% → 7.2%
-                        tp_price = price * (1 + tp_pct)  # LONG: TP is above entry
-                        
-                        # Round prices to appropriate precision
-                        sl_price = float(Decimal(str(sl_price)).quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
-                        tp_price = float(Decimal(str(tp_price)).quantize(Decimal('0.00001'), rounding=ROUND_UP))
-                        
-                        # Place stop-loss order
+                        # STOP_MARKET (safety SL)
                         self.exchange.create_order(
-                            symbol, 'STOP_MARKET', 'sell', amount, None,
-                            {'stopPrice': sl_price, 'reduceOnly': True}
+                            symbol=symbol,
+                            type='STOP_MARKET',
+                            side='sell',
+                            amount=amount,
+                            params={'stopPrice': sl_price, 'closePosition': False}
                         )
-                        self.logger.info(f"🛑 SL Order: {coin} @ ${sl_price:,.5f}")
+                        self.logger.info(f"🛡️ {coin} LONG Safety SL: ${sl_price:,.5f}")
                         
-                        # Place take-profit order
+                        # TAKE_PROFIT_MARKET (safety TP)
                         self.exchange.create_order(
-                            symbol, 'TAKE_PROFIT_MARKET', 'sell', amount, None,
-                            {'stopPrice': tp_price, 'reduceOnly': True}
+                            symbol=symbol,
+                            type='TAKE_PROFIT_MARKET',
+                            side='sell',
+                            amount=amount,
+                            params={'stopPrice': tp_price, 'closePosition': False}
                         )
-                        self.logger.info(f"🎯 TP Order: {coin} @ ${tp_price:,.5f}")
-                        
-                    except Exception as e:
-                        self.logger.warning(f"⚠️ TP/SL order error for {coin}: {e}")
+                        self.logger.info(f"🛡️ {coin} LONG Safety TP: ${tp_price:,.5f}")
+                    except Exception as sltp_err:
+                        self.logger.warning(f"⚠️ {coin} Safety SL/TP emri gönderilemedi: {sltp_err}")
+                        asyncio.ensure_future(self.send_notification(f"⚠️ {coin} Safety SL/TP gönderilemedi! Manuel kontrol edin."))
             
             # Update position
             pos = self.positions[coin]
@@ -2666,6 +3144,107 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.error(f"Buy error for {coin}: {e}")
             return False
     
+    async def update_trailing_sl(self) -> None:
+        """
+        Update trailing stop-loss for open positions.
+        When profit exceeds trailing_activation_pct, move SL up to lock in profits.
+        """
+        if not self.config.trailing_sl_enabled:
+            return
+        
+        if self.config.trading_mode != 'futures':
+            return  # Trailing SL only for futures
+        
+        # NOTE: Exchange-level trailing SL orders DISABLED
+        # Trailing SL is now managed internally in should_trade()
+        return
+        
+        for coin, pos in self.positions.items():
+            if pos.side not in ["LONG", "SHORT"]:
+                continue
+            
+            try:
+                symbol = f"{coin}/USDT:USDT"
+                current_price = self.get_current_price(symbol)
+                if not current_price:
+                    continue
+                
+                # Calculate current ROE (with leverage)
+                if pos.side == "LONG":
+                    pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100 * self.config.leverage
+                else:  # SHORT
+                    pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100 * self.config.leverage
+                
+                # Only activate trailing SL when profit exceeds threshold
+                if pnl_pct < self.config.trailing_activation_pct:
+                    continue
+                
+                # Calculate new SL price
+                # For LONG: SL = current_price * (1 - trailing_distance_pct / leverage / 100)
+                # For SHORT: SL = current_price * (1 + trailing_distance_pct / leverage / 100)
+                distance_factor = (self.config.trailing_distance_pct / self.config.leverage) / 100
+                
+                if pos.side == "LONG":
+                    new_sl_price = current_price * (1 - distance_factor)
+                    # SL should be above entry price to lock in profit
+                    min_sl = pos.entry_price * (1 + 0.002)  # At least 0.2% above entry
+                    if new_sl_price < min_sl:
+                        continue  # Don't move SL lower than break-even
+                else:  # SHORT
+                    new_sl_price = current_price * (1 + distance_factor)
+                    # SL should be below entry price for SHORT
+                    max_sl = pos.entry_price * (1 - 0.002)  # At least 0.2% below entry
+                    if new_sl_price > max_sl:
+                        continue  # Don't move SL higher than break-even
+                
+                # Check if we have an existing SL order
+                try:
+                    open_orders = self.exchange.fetch_open_orders(symbol)
+                    existing_sl = None
+                    for order in open_orders:
+                        order_type = order.get('type', '').lower()
+                        if order_type in ['stop_market', 'stop']:
+                            existing_sl = order
+                            break
+                    
+                    if existing_sl:
+                        # Check if new SL is better than existing
+                        existing_sl_price = float(existing_sl.get('stopPrice', 0))
+                        
+                        if pos.side == "LONG":
+                            # For LONG, new SL should be higher than existing
+                            if new_sl_price <= existing_sl_price:
+                                continue  # Existing SL is already higher
+                        else:  # SHORT
+                            # For SHORT, new SL should be lower than existing
+                            if new_sl_price >= existing_sl_price:
+                                continue  # Existing SL is already lower
+                        
+                        # Cancel old SL
+                        self.exchange.cancel_order(existing_sl['id'], symbol)
+                        self.logger.info(f"🔄 {coin}: Trailing SL - eski SL iptal ({existing_sl_price:.4f})")
+                    
+                    # Place new SL order
+                    side = 'sell' if pos.side == "LONG" else 'buy'
+                    sl_order = self.exchange.create_order(
+                        symbol=symbol,
+                        type='STOP_MARKET',
+                        side=side,
+                        amount=pos.amount,
+                        params={
+                            'stopPrice': new_sl_price,
+                            'reduceOnly': True
+                        }
+                    )
+                    
+                    self.logger.info(f"🔒 {coin}: Trailing SL güncellendi: {new_sl_price:.4f} (ROE: {pnl_pct:+.2f}%)")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Trailing SL order error {coin}: {e}")
+                    
+            except Exception as e:
+                self.logger.warning(f"Trailing SL error {coin}: {e}")
+    
     async def execute_sell(self, coin: str, reason: str) -> bool:
         """Execute sell order."""
         try:
@@ -2695,19 +3274,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if not self.config.dry_run:
                 # Cancel any pending TP/SL orders first
                 if self.config.trading_mode == 'futures':
-                    try:
-                        # Fetch all open orders (including conditional like STOP_MARKET)
-                        open_orders = self.exchange.fetch_open_orders(symbol)
-                        for order in open_orders:
-                            try:
-                                self.exchange.cancel_order(order['id'], symbol)
-                                self.logger.info(f"🗑️ Emir iptal: {order['type']} @ {order.get('stopPrice', order.get('price', 'N/A'))}")
-                            except Exception as cancel_err:
-                                self.logger.warning(f"⚠️ Tekil iptal hatası: {cancel_err}")
-                        if open_orders:
-                            self.logger.info(f"🗑️ {len(open_orders)} TP/SL emri iptal edildi: {coin}")
-                    except Exception as e:
-                        self.logger.warning(f"⚠️ Emir iptal hatası: {e}")
+                    self._cancel_all_orders(symbol)
                 
                 self.exchange.create_market_sell_order(symbol, amount)
             
@@ -2768,6 +3335,17 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             # Clear pending trade
             if coin in self.pending_trades:
                 del self.pending_trades[coin]
+            
+            # Update meta-model with trade result
+            if self.meta_gate:
+                self.meta_gate.update_trade_result(pnl_pct > 0)
+            
+            # Trigger SL cooldown
+            if 'Stop-Loss' in reason and self.config.sl_cooldown_candles > 0:
+                cooldown_minutes = self.config.sl_cooldown_candles * 15
+                self.sl_cooldown_until[coin] = datetime.now() + timedelta(minutes=cooldown_minutes)
+                self.logger.info(f"⏳ {coin}: SL Cooldown aktif — {cooldown_minutes}dk")
+                asyncio.ensure_future(self.send_notification(f"⏳ {coin} SL Cooldown aktif — {cooldown_minutes}dk bekleme"))
             
             # Reset position
             pos.side = "FLAT"
@@ -2956,11 +3534,40 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 return False
             
             symbol = f"{coin}/USDT"
+            
+            # Fetch actual balance for safety (prevent insufficient balance error due to fees)
+            actual_amount = pos.amount
+            if not self.config.dry_run and self.config.trading_mode == 'spot':
+                try:
+                    balance = self.exchange.fetch_balance()
+                    available = float(balance.get(coin, {}).get('free', 0.0))
+                    if available < pos.amount:
+                        self.logger.warning(f"⚠️ {coin} balance mismatch: Tracked {pos.amount:.6f}, Actual {available:.6f}. Adjusting to actual.")
+                        actual_amount = available
+                    elif available > pos.amount * 1.05:
+                        # If we have WAY more (e.g. HODL bag), stick to pos.amount, don't sell everything
+                        actual_amount = pos.amount
+                    else:
+                        # Small difference or exact match
+                        actual_amount = min(pos.amount, available)
+                        
+                    # Round down to step size
+                    actual_amount = float(Decimal(str(actual_amount)).quantize(Decimal('0.000001'), rounding=ROUND_DOWN))
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Balance check failed for {coin}: {e}")
+            
             price = self.get_current_price(f"{coin}/USDT")
             if price is None:
                 return False
             
-            amount = pos.amount
+            # Use actual amount for execution
+            amount = actual_amount
+            
+            if amount < 0.000001:
+                self.logger.warning(f"⚠️ {coin}: Satılacak miktar çok düşük ({amount}), işlem iptal.")
+                self._finalize_grid_position(coin, price) # Force close tracking
+                return True
+                
             avg_entry = pos.avg_entry_price() if pos.grid_entries else pos.entry_price
             pnl_pct = ((price - avg_entry) / avg_entry) * 100 if avg_entry > 0 else 0
             pnl_usdt = (price - avg_entry) * amount
@@ -2970,19 +3577,8 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if not self.config.dry_run:
                 # Cancel any pending TP/SL orders first (if futures)
                 if self.config.trading_mode == 'futures':
-                    try:
-                        futures_symbol = f"{coin}/USDT:USDT"
-                        open_orders = self.exchange.fetch_open_orders(futures_symbol)
-                        for order in open_orders:
-                            try:
-                                self.exchange.cancel_order(order['id'], futures_symbol)
-                                self.logger.info(f"🗑️ Emir iptal: {order['type']} @ {order.get('stopPrice', order.get('price', 'N/A'))}")
-                            except Exception as cancel_err:
-                                self.logger.warning(f"⚠️ Tekil iptal hatası: {cancel_err}")
-                        if open_orders:
-                            self.logger.info(f"🗑️ {len(open_orders)} TP/SL emri iptal edildi: {coin}")
-                    except Exception as e:
-                        self.logger.warning(f"⚠️ Emir iptal hatası: {e}")
+                    futures_symbol = f"{coin}/USDT:USDT"
+                    self._cancel_all_orders(futures_symbol)
                 
                 self.exchange.create_market_sell_order(symbol, amount)
             
@@ -2991,6 +3587,17 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.daily_pnl_pct += pnl_pct
             self.daily_trades += 1
             self.total_trades += 1
+            
+            # Update meta-model with trade result
+            if self.meta_gate:
+                self.meta_gate.update_trade_result(pnl_pct > 0)
+            
+            # Trigger SL cooldown
+            if 'Stop-Loss' in reason and self.config.sl_cooldown_candles > 0:
+                cooldown_minutes = self.config.sl_cooldown_candles * 15
+                self.sl_cooldown_until[coin] = datetime.now() + timedelta(minutes=cooldown_minutes)
+                self.logger.info(f"⏳ {coin}: SL Cooldown aktif — {cooldown_minutes}dk")
+                asyncio.ensure_future(self.send_notification(f"⏳ {coin} SL Cooldown aktif — {cooldown_minutes}dk bekleme"))
             
             # Send notification
             await self.send_sell_all_alert(coin, price, amount, avg_entry, pnl_pct, pnl_usdt, reason)
@@ -3044,6 +3651,10 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             grid_sell_levels=pos.sell_grid_level
         )
         self.trade_history.add_trade(trade_record)
+        
+        # Update meta-model with trade result
+        if self.meta_gate:
+            self.meta_gate.update_trade_result(final_pnl_pct > 0)
         
         # Clear pending
         if coin in self.pending_trades:
@@ -3198,44 +3809,39 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if not self.config.dry_run:
                 self.exchange.create_market_sell_order(symbol, amount)
                 
-                # ========== BINANCE TP/SL ORDERS FOR SHORT ==========
-                # Place stop-loss and take-profit orders on Binance
-                # This protects position even if bot doesn't check for 15 minutes
+                # === SAFETY NET: Exchange-level SL/TP orders ===
+                # These protect against bot crash / internet loss
+                # Internal trailing SL can close earlier and will cancel these
                 try:
-                    leverage = self.config.leverage
-                    pred_pct = abs(prediction['prediction_pct'])
+                    prediction_pct = abs(prediction.get('prediction_pct', 0))
+                    tp_pct = min(prediction_pct, self.config.futures_tp_pct) / self.config.leverage / 100
+                    sl_pct = abs(self.config.futures_sl_pct) / self.config.leverage / 100
                     
-                    # Calculate TP/SL prices for SHORT
-                    # SL: +20% ROE / leverage = price move UP (SHORT loses when price goes up)
-                    sl_pct = abs(self.config.futures_sl_pct) / leverage / 100
-                    sl_price = price * (1 + sl_pct)  # SHORT: SL is above entry
+                    sl_price = float(Decimal(str(price * (1 + sl_pct))).quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
+                    tp_price = float(Decimal(str(price * (1 - tp_pct))).quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
                     
-                    # TP: min(prediction, 20% ROE) / leverage = price move DOWN
-                    # Apply tp_multiplier (0.80) to make TP more achievable
-                    tp_pct = min(pred_pct, self.config.futures_tp_pct) / leverage / 100
-                    tp_pct *= self.config.tp_multiplier  # e.g. 9% → 7.2%
-                    tp_price = price * (1 - tp_pct)  # SHORT: TP is below entry
-                    
-                    # Round prices to appropriate precision
-                    sl_price = float(Decimal(str(sl_price)).quantize(Decimal('0.00001'), rounding=ROUND_UP))
-                    tp_price = float(Decimal(str(tp_price)).quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
-                    
-                    # Place stop-loss order (buy back to close short)
+                    # STOP_MARKET (safety SL for SHORT — price goes UP)
                     self.exchange.create_order(
-                        symbol, 'STOP_MARKET', 'buy', amount, None,
-                        {'stopPrice': sl_price, 'reduceOnly': True}
+                        symbol=symbol,
+                        type='STOP_MARKET',
+                        side='buy',
+                        amount=amount,
+                        params={'stopPrice': sl_price, 'closePosition': False}
                     )
-                    self.logger.info(f"🛑 SL Order (SHORT): {coin} @ ${sl_price:,.5f}")
+                    self.logger.info(f"🛡️ {coin} SHORT Safety SL: ${sl_price:,.5f}")
                     
-                    # Place take-profit order (buy back to close short)
+                    # TAKE_PROFIT_MARKET (safety TP for SHORT — price goes DOWN)
                     self.exchange.create_order(
-                        symbol, 'TAKE_PROFIT_MARKET', 'buy', amount, None,
-                        {'stopPrice': tp_price, 'reduceOnly': True}
+                        symbol=symbol,
+                        type='TAKE_PROFIT_MARKET',
+                        side='buy',
+                        amount=amount,
+                        params={'stopPrice': tp_price, 'closePosition': False}
                     )
-                    self.logger.info(f"🎯 TP Order (SHORT): {coin} @ ${tp_price:,.5f}")
-                    
-                except Exception as e:
-                    self.logger.warning(f"⚠️ TP/SL order error for {coin} SHORT: {e}")
+                    self.logger.info(f"🛡️ {coin} SHORT Safety TP: ${tp_price:,.5f}")
+                except Exception as sltp_err:
+                    self.logger.warning(f"⚠️ {coin} Safety SL/TP emri gönderilemedi: {sltp_err}")
+                    asyncio.ensure_future(self.send_notification(f"⚠️ {coin} Safety SL/TP gönderilemedi! Manuel kontrol edin."))
             
             # Update position
             pos = self.positions[coin]
@@ -3333,18 +3939,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             
             if not self.config.dry_run:
                 # Cancel any pending TP/SL orders first
-                try:
-                    open_orders = self.exchange.fetch_open_orders(symbol)
-                    for order in open_orders:
-                        try:
-                            self.exchange.cancel_order(order['id'], symbol)
-                            self.logger.info(f"🗑️ Emir iptal: {order['type']} @ {order.get('stopPrice', order.get('price', 'N/A'))}")
-                        except Exception as cancel_err:
-                            self.logger.warning(f"⚠️ Tekil iptal hatası: {cancel_err}")
-                    if open_orders:
-                        self.logger.info(f"🗑️ {len(open_orders)} TP/SL emri iptal edildi: {coin}")
-                except Exception as e:
-                    self.logger.warning(f"⚠️ Emir iptal hatası: {e}")
+                self._cancel_all_orders(symbol)
                 
                 self.exchange.create_market_buy_order(symbol, amount)
             
@@ -3404,6 +3999,17 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if coin in self.pending_trades:
                 del self.pending_trades[coin]
             
+            # Update meta-model with trade result
+            if self.meta_gate:
+                self.meta_gate.update_trade_result(pnl_pct > 0)
+            
+            # Trigger SL cooldown
+            if 'Stop-Loss' in reason and self.config.sl_cooldown_candles > 0:
+                cooldown_minutes = self.config.sl_cooldown_candles * 15
+                self.sl_cooldown_until[coin] = datetime.now() + timedelta(minutes=cooldown_minutes)
+                self.logger.info(f"⏳ {coin}: SL Cooldown aktif — {cooldown_minutes}dk")
+                asyncio.ensure_future(self.send_notification(f"⏳ {coin} SL Cooldown aktif — {cooldown_minutes}dk bekleme"))
+            
             # Reset position
             pos.side = "FLAT"
             pos.entry_price = 0.0
@@ -3444,6 +4050,109 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
 ⏰ {datetime.now().strftime('%H:%M:%S')}
 """
         await self.send_notification(msg.strip())
+    
+    # ========== REAL-TIME SL MONITOR ==========
+    
+    async def sl_monitor_loop(self):
+        """
+        Async SL monitor — checks every 15 seconds if any open position hit SL.
+        Runs as asyncio task alongside trading_loop.
+        Exchange safety SL/TP orders provide protection when bot/asyncio is blocked.
+        """
+        self.logger.info("🔒 SL Monitor başlatıldı (15s interval)")
+        
+        while True:
+            try:
+                if not self.is_running:
+                    await asyncio.sleep(5)
+                    continue
+                
+                is_futures = self.config.trading_mode == 'futures'
+                leverage = self.config.leverage if is_futures else 1
+                
+                if is_futures:
+                    sl_limit = self.config.futures_sl_pct / 100
+                else:
+                    sl_limit = self.config.spot_sl_pct / 100
+                
+                for coin, pos in list(self.positions.items()):
+                    if pos.side not in ["LONG", "SHORT"]:
+                        continue
+                    
+                    symbol = f"{coin}/USDT:USDT" if is_futures else f"{coin}/USDT"
+                    price = self.get_current_price(symbol)
+                    if price is None:
+                        continue
+                    
+                    current_pnl = pos.pnl_pct(price) / 100
+                    if is_futures:
+                        current_pnl *= leverage
+                    
+                    # ---- LONG position checks ----
+                    if pos.side == "LONG":
+                        if current_pnl <= sl_limit:
+                            reason = f'🛑 Stop-Loss (monitor): {current_pnl*100:.2f}%'
+                            self.logger.info(f"🛑 SL Monitor: {coin} LONG SL tetiklendi @ ${price:,.4f}")
+                            await self.execute_sell(coin, reason)
+                            continue
+                        
+                        if (self.config.trailing_sl_enabled 
+                            and hasattr(pos, 'trailing_sl_price') 
+                            and pos.trailing_sl_price > 0 
+                            and price <= pos.trailing_sl_price):
+                            trail_pnl = ((pos.trailing_sl_price - pos.entry_price) / pos.entry_price) * 100 * leverage
+                            reason = f'🔒 Trailing SL (monitor): {trail_pnl:+.2f}%'
+                            self.logger.info(f"🔒 SL Monitor: {coin} LONG Trailing SL @ ${price:,.4f} (SL: ${pos.trailing_sl_price:,.4f})")
+                            await self.execute_sell(coin, reason)
+                            continue
+                    
+                    # ---- SHORT position checks ----
+                    elif pos.side == "SHORT":
+                        if current_pnl <= sl_limit:
+                            reason = f'🛑 Stop-Loss (monitor): {current_pnl*100:.2f}%'
+                            self.logger.info(f"🛑 SL Monitor: {coin} SHORT SL tetiklendi @ ${price:,.4f}")
+                            await self.close_short(coin, reason)
+                            continue
+                        
+                        if (self.config.trailing_sl_enabled 
+                            and hasattr(pos, 'trailing_sl_price') 
+                            and pos.trailing_sl_price > 0 
+                            and price >= pos.trailing_sl_price):
+                            trail_pnl = ((pos.entry_price - pos.trailing_sl_price) / pos.entry_price) * 100 * leverage
+                            reason = f'🔒 Trailing SL (monitor): {trail_pnl:+.2f}%'
+                            self.logger.info(f"🔒 SL Monitor: {coin} SHORT Trailing SL @ ${price:,.4f} (SL: ${pos.trailing_sl_price:,.4f})")
+                            await self.close_short(coin, reason)
+                            continue
+                
+                # ---- IP Change Detection (every 60s) ----
+                import time as _time
+                if _time.time() - self._last_ip_check >= self.ip_check_interval:
+                    self._last_ip_check = _time.time()
+                    try:
+                        current_ip = self._get_public_ip()
+                        if current_ip and current_ip != 'N/A':
+                            if self.last_known_ip == '':
+                                # First check — store IP
+                                self.last_known_ip = current_ip
+                                self.logger.info(f"🌐 Public IP: {current_ip}")
+                            elif current_ip != self.last_known_ip:
+                                old_ip = self.last_known_ip
+                                self.last_known_ip = current_ip
+                                self.logger.warning(f"🌐 IP DEĞİŞTİ! {old_ip} → {current_ip}")
+                                await self.send_notification(
+                                    f"⚠️ <b>Public IP Değişti!</b>\n\n"
+                                    f"🔴 Eski: <code>{old_ip}</code>\n"
+                                    f"🟢 Yeni: <code>{current_ip}</code>\n\n"
+                                    f"⚠️ Binance API IP whitelist'i güncellemeyi unutmayın!"
+                                )
+                    except Exception as ip_err:
+                        self.logger.debug(f"IP check failed: {ip_err}")
+                
+                await asyncio.sleep(15)
+                
+            except Exception as e:
+                self.logger.error(f"SL Monitor error: {e}")
+                await asyncio.sleep(15)
     
     # ========== MAIN LOOP ==========
     
@@ -3489,18 +4198,16 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                             # Count active positions
                             active_positions = sum(1 for p in self.positions.values() if p.side in ["LONG", "SHORT"])
                             
-                            sync_msg = f"🔄 <b>Pre-Trade Sync ({now.strftime('%H:%M')})</b>\n\n"
-                            sync_msg += f"⏰ Sonraki işlem döngüsü: {(now.hour + (1 if upcoming_candle == 0 and tf_minutes == 60 else 0)) % 24:02d}:{upcoming_candle:02d}\n"
-                            sync_msg += f"📊 Aktif pozisyon: {active_positions}\n"
-                            
                             if closed_coins:
+                                # Only notify when manual closures detected
+                                sync_msg = f"🔄 <b>Pre-Trade Sync ({now.strftime('%H:%M')})</b>\n\n"
+                                sync_msg += f"⏰ Sonraki işlem döngüsü: {(now.hour + (1 if upcoming_candle == 0 and tf_minutes == 60 else 0)) % 24:02d}:{upcoming_candle:02d}\n"
+                                sync_msg += f"📊 Aktif pozisyon: {active_positions}\n"
                                 sync_msg += f"\n⚠️ <b>Manuel kapatma algılandı:</b>\n"
                                 for coin in closed_coins:
                                     sync_msg += f"• {coin}\n"
-                            else:
-                                sync_msg += f"\n✅ Tüm pozisyonlar senkronize"
+                                await self.send_notification(sync_msg)
                             
-                            await self.send_notification(sync_msg)
                             self.logger.info(f"✅ Pre-trade sync tamamlandı - {active_positions} aktif pozisyon")
                         else:
                             self.logger.warning("⚠️ Pre-trade sync başarısız oldu")
@@ -3538,6 +4245,9 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         synced, closed_coins = await self.sync_positions_with_exchange()
                         if closed_coins:
                             self.logger.info(f"🔄 Manuel kapatma algılandı: {', '.join(closed_coins)}")
+                        
+                        # Update trailing stop-losses for profitable positions
+                        await self.update_trailing_sl()
                     
                     # Calculate total portfolio value (free USDT + open positions)
                     # This is used for proper position sizing
@@ -3637,6 +4347,47 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                             if not success:
                                 await self.send_notification(f"[HATA] {coin} CLOSE_SHORT basarisiz - exchange hatasi")
                         
+                        # ========== FLIP ACTIONS ==========
+                        # Close LONG and immediately open SHORT
+                        elif action == 'SELL_AND_FLIP':
+                            self.logger.info(f"🔄 {coin}: Pozisyon flip - LONG -> SHORT")
+                            # First close the LONG
+                            success = await self.execute_sell(coin, reason)
+                            if success:
+                                # Immediately open SHORT
+                                trade_amount = (total_portfolio_value * self.config.position_pct) / self.config.max_positions
+                                if trade_amount > usdt_balance:
+                                    trade_amount = usdt_balance * 0.95
+                                if trade_amount > 5:
+                                    await asyncio.sleep(0.5)  # Brief pause for exchange
+                                    flip_success = await self.execute_short(coin, trade_amount, prediction)
+                                    if flip_success:
+                                        await self.send_notification(f"🔄 {coin} FLIP başarılı: LONG → SHORT")
+                                    else:
+                                        await self.send_notification(f"⚠️ {coin} LONG kapatıldı ama SHORT açılamadı")
+                            else:
+                                await self.send_notification(f"[HATA] {coin} SELL_AND_FLIP basarisiz - exchange hatasi")
+                        
+                        # Close SHORT and immediately open LONG
+                        elif action == 'CLOSE_SHORT_AND_FLIP':
+                            self.logger.info(f"🔄 {coin}: Pozisyon flip - SHORT -> LONG")
+                            # First close the SHORT
+                            success = await self.close_short(coin, reason)
+                            if success:
+                                # Immediately open LONG
+                                trade_amount = (total_portfolio_value * self.config.position_pct) / self.config.max_positions
+                                if trade_amount > usdt_balance:
+                                    trade_amount = usdt_balance * 0.95
+                                if trade_amount > 5:
+                                    await asyncio.sleep(0.5)  # Brief pause for exchange
+                                    flip_success = await self.execute_buy(coin, trade_amount, prediction)
+                                    if flip_success:
+                                        await self.send_notification(f"🔄 {coin} FLIP başarılı: SHORT → LONG")
+                                    else:
+                                        await self.send_notification(f"⚠️ {coin} SHORT kapatıldı ama LONG açılamadı")
+                            else:
+                                await self.send_notification(f"[HATA] {coin} CLOSE_SHORT_AND_FLIP basarisiz - exchange hatasi")
+                        
                         elif action == 'HOLD' and 'Max pozisyon' in reason:
                             await self.send_notification(f"[BILGI] {coin}: {reason} - sinyal vardi ama islem acilamadi")
                 
@@ -3686,6 +4437,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         self.telegram_app.add_handler(CommandHandler("close", self.cmd_close))
         self.telegram_app.add_handler(CommandHandler("sync", self.cmd_sync))
         self.telegram_app.add_handler(CommandHandler("fearfilter", self.cmd_fearfilter))
+        self.telegram_app.add_handler(CommandHandler("hours", self.cmd_hours))
         
         # Start Telegram
         await self.telegram_app.initialize()
@@ -3695,11 +4447,14 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         # Send startup message
         await self.send_notification(f"🤖 Bot başlatıldı!\n\nMod: {'TESTNET' if self.config.testnet else 'MAINNET'}\nCoinler: {', '.join(self.config.coins_to_trade)}\n\n/start ile aktif edin. /help ile yardım alabilirsiniz.")
         
-        self.logger.info("✅ Telegram active, starting trading loop...")
+        self.logger.info("✅ Telegram active, starting trading loop + SL monitor...")
         
-        # Run trading loop
+        # Run trading loop AND SL monitor in parallel (same asyncio loop)
         try:
-            await self.trading_loop()
+            await asyncio.gather(
+                self.trading_loop(),
+                self.sl_monitor_loop()
+            )
         finally:
             await self.telegram_app.updater.stop()
             await self.telegram_app.stop()

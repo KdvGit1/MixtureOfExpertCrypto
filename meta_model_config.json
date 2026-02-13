@@ -1,0 +1,46 @@
+{
+  "feature_names": [
+    "pred_pct",
+    "confidence",
+    "pred_conf_product",
+    "branch_agreement",
+    "wick_up_ratio",
+    "wick_down_ratio",
+    "body_ratio",
+    "atr_rank",
+    "bb_squeeze",
+    "chop_score",
+    "adx_value",
+    "net_edge_after_fee",
+    "recent_stop_streak",
+    "recent_win_streak",
+    "sweep_low",
+    "sweep_high",
+    "dist_to_swing_low",
+    "dist_to_swing_high"
+  ],
+  "threshold": 0.5,
+  "optimal_threshold_roc": 0.5055137872695923,
+  "fee_pct": 0.002,
+  "future_candles": 32,
+  "coins_used": [
+    "BTC",
+    "LTC",
+    "ADA"
+  ],
+  "timeframes_used": [
+    "15m"
+  ],
+  "training_date": "2026-02-11T19:50:02.007664",
+  "train_samples": 45938,
+  "val_samples": 11485,
+  "val_metrics": {
+    "accuracy": 0.7986939486286461,
+    "precision_karli": 0.8400995787054768,
+    "recall_karli": 0.7481241473396999,
+    "f1_karli": 0.7914486740032474,
+    "roc_auc": 0.8836471525727071,
+    "avg_precision": 0.8896481177712126
+  },
+  "best_iteration": 113
+}
