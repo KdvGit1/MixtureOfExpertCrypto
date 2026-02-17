@@ -87,10 +87,10 @@ class MetaModelGate:
             if config_path.exists():
                 with open(config_path) as f:
                     self.config = json.load(f)
-                self.threshold = self.config.get('threshold', self.threshold)
+                # self.threshold = self.config.get('threshold', self.threshold)  # Don't overwrite init threshold
 
             self.loaded = True
-            logger.info(f"✅ Meta-model yüklendi (threshold: {self.threshold:.2f})")
+            logger.info(f"✅ Meta-model yüklendi (threshold: {self.threshold:.2f}, default: {self.config.get('threshold', 0.50):.2f})")
             return True
 
         except Exception as e:

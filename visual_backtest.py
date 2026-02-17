@@ -21,12 +21,15 @@ python visual_backtest.py --coin SOL --days 30 --no-anim
 # Saat filtresi kapalı
 python visual_backtest.py --coin BTC --days 7 --no-hour-filter
 
+# Fear & Greed Index filtresi ile (F&G < 20 veya > 80 olduğunda meta model çalışmaz)
+python visual_backtest.py --coin BTC --days 30 --fear
+
 # SPOT modu (kaldıraçsız, sadece LONG)
 python visual_backtest.py --coin BTC --days 30 --mode spot
 # SPOT + Grid (kademeli alım)
 python visual_backtest.py --coin BTC --days 30 --mode spot --grid --grid-levels 2
 
-python visual_backtest.py --coin LTC --days 90 --meta-compare --meta-threshold 0.50 --speed 150 --no-hour-filter
+python visual_backtest.py --coin LTC --days 90 --meta-compare --meta-threshold 0.50 --speed 150 --no-hour-filter --fear
 ================================================================================
 """
 
@@ -49,6 +52,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.animation import FuncAnimation
 import matplotlib.dates as mdates
+import requests
 
 # ========== PATH SETUP ==========
 PROJECT_ROOT = Path(__file__).parent
@@ -58,7 +62,16 @@ from train_models.data_fetcher import get_crypto_history, prepare_dual_dataframe
 from train_models.ai_engine_improved import MultiBranchModel, CNN_FEATURES, LSTM_FEATURES, TR_FEATURES
 from meta_model_gate import MetaModelGate
 
-DEVICE = torch.device("cpu")
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+else:
+    DEVICE = torch.device("cpu")
+
+# All supported coins
+ALL_COINS = [
+    "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT", "LINK", "LTC",
+    "AVAX", "ATOM", "FIL", "TRX", "UNI", "MATIC", "APT", "ARB", "OP", "INJ"
+]
 
 # ========== CONFIGURATION ==========
 @dataclass
@@ -74,10 +87,10 @@ class SimConfig:
     max_positions: int = 1
     
     # Thresholds
-    prediction_threshold: float = 0.003  # 0.3%
+    prediction_threshold: float = 0.001  # 0.1% (optimized)
     min_confidence_threshold: float = 25.0
     min_prediction_pct: float = 10.0  # %10 effective move
-    prediction_scale: float = 0.5
+    prediction_scale: float = 0.30  # (optimized from 0.5)
     tp_multiplier: float = 0.80
     
     # Spot SL/TP (ROE %)
@@ -86,7 +99,7 @@ class SimConfig:
     
     # Futures SL/TP (ROE %)
     futures_sl_pct: float = -5.0
-    futures_tp_pct: float = 10.0
+    futures_tp_pct: float = 5.0  # (optimized from 10.0)
     
     # Grid Trading (Spot only)
     grid_enabled: bool = True
@@ -94,8 +107,8 @@ class SimConfig:
     
     # Trailing Stop-Loss
     trailing_sl_enabled: bool = True
-    trailing_activation_pct: float = 2.0  # Activate at +2% profit
-    trailing_distance_pct: float = 1.0    # Trail 1% behind
+    trailing_activation_pct: float = 1.0  # Activate at +1% profit (optimized from 2%)
+    trailing_distance_pct: float = 2.0    # Trail 2% behind (optimized from 1%)
     
     # Hour filter
     hour_filter_enabled: bool = True
@@ -113,6 +126,11 @@ class SimConfig:
     
     # SL Cooldown
     sl_cooldown_candles: int = 16  # SL sonrası bekleme (16 mum = 4 saat)
+    
+    # Fear & Greed Filter
+    fear_filter_enabled: bool = False  # Fear index kontrolü
+    fear_min_threshold: int = 20       # < 20 = extreme fear
+    fear_max_threshold: int = 80       # > 80 = extreme greed
     
     # Animation
     animation_speed: int = 100  # ms per candle (lower = faster)
@@ -213,6 +231,31 @@ class Position:
         else:  # SHORT
             return ((entry - current_price) / entry) * 100
 
+# ========== FEAR & GREED INDEX ==========
+def fetch_fear_greed_index(days=200):
+    """
+    Fetch Fear & Greed Index from alternative.me API.
+    Returns dict: {date_str: value}
+    """
+    try:
+        url = f"https://api.alternative.me/fng/?limit={days}&format=json"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        fear_dict = {}
+        for item in data.get('data', []):
+            timestamp = int(item['timestamp'])
+            date_obj = datetime.fromtimestamp(timestamp)
+            date_str = date_obj.strftime('%Y-%m-%d')
+            fear_value = int(item['value'])
+            fear_dict[date_str] = fear_value
+        
+        return fear_dict
+    except Exception as e:
+        print(f"⚠️  Fear & Greed Index yüklenemedi: {e}")
+        return {}
+
 @dataclass
 class Trade:
     """Trade kaydı"""
@@ -255,6 +298,10 @@ class RealAIBacktester:
         # SL Cooldown
         self.sl_cooldown_until = None  # datetime until which new trades are blocked
         self.sl_cooldown_blocked = 0   # Count of signals blocked by cooldown
+        
+        # Fear & Greed Filter
+        self.fear_index_data = {}      # {date_str: value}
+        self.fear_blocked_count = 0    # Trades blocked by fear filter
         
         # State
         self.balance = self.config.initial_balance
@@ -377,6 +424,16 @@ class RealAIBacktester:
             print(f"✅ {len(self.df_display)} mum verisi hazır")
             print(f"   📅 Test aralığı: mum {self.start_idx} → {self.end_idx} ({self.end_idx - self.start_idx} mum)")
             
+            # Load Fear & Greed Index if enabled
+            if self.config.fear_filter_enabled:
+                print(f"📊 Fear & Greed Index yükleniyor...")
+                self.fear_index_data = fetch_fear_greed_index(days=200)
+                if self.fear_index_data:
+                    print(f"✅ Fear & Greed Index yüklendi ({len(self.fear_index_data)} gün)")
+                else:
+                    print(f"⚠️  Fear & Greed Index yüklenemedi, filtre devre dışı")
+                    self.config.fear_filter_enabled = False
+            
             return True
             
         except Exception as e:
@@ -384,6 +441,20 @@ class RealAIBacktester:
             import traceback
             traceback.print_exc()
             return False
+    
+    def is_fear_index_extreme(self, timestamp: datetime) -> Tuple[bool, int]:
+        """
+        Check if Fear & Greed Index is in extreme state (< 20 or > 80).
+        Returns: (is_extreme, fear_value)
+        """
+        if not self.config.fear_filter_enabled or not self.fear_index_data:
+            return False, 0
+        
+        date_str = timestamp.strftime('%Y-%m-%d')
+        fear_value = self.fear_index_data.get(date_str, 50)  # Default to neutral if not found
+        
+        is_extreme = fear_value < self.config.fear_min_threshold or fear_value > self.config.fear_max_threshold
+        return is_extreme, fear_value
     
     def get_prediction(self, idx: int) -> Optional[Dict]:
         """Belirli bir index için AI tahmini al"""
@@ -678,7 +749,15 @@ class RealAIBacktester:
                     return ('HOLD', f'⚠️ Zayıf LONG: {effective_pct:.1f}%')
                 
                 # === META-MODEL GATE ===
-                if self.use_meta_model and self.meta_gate and self.meta_gate.loaded:
+                # Skip meta-model check if fear index is extreme
+                skip_meta = False
+                if self.use_meta_model and self.config.fear_filter_enabled:
+                    is_extreme, fear_value = self.is_fear_index_extreme(prediction['timestamp'])
+                    if is_extreme:
+                        skip_meta = True
+                        self.fear_blocked_count += 1
+                
+                if self.use_meta_model and self.meta_gate and self.meta_gate.loaded and not skip_meta:
                     df_disp = prediction.get('df_display')
                     candle_idx = prediction.get('candle_idx', -1)
                     allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
@@ -700,7 +779,21 @@ class RealAIBacktester:
                     return ('HOLD', f'⚠️ Zayıf SHORT: {effective_pct:.1f}%')
                 
                 # === META-MODEL GATE (SHORT) ===
-                if self.use_meta_model and self.meta_gate and self.meta_gate.loaded:
+                # Skip meta-model check if fear index is extreme
+                skip_meta = False
+                if self.use_meta_model and self.config.fear_filter_enabled:
+                    is_extreme, fear_value = self.is_fear_index_extreme(prediction['timestamp'])
+                    if is_extreme:
+                        skip_meta = True
+                        self.fear_blocked_count += 1
+                
+                if self.use_meta_model and self.meta_gate and self.meta_gate.loaded and not skip_meta:
+                    df_disp = prediction.get('df_display')
+                    candle_idx = prediction.get('candle_idx', -1)
+                    allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
+                    if not allow:
+                        self.meta_blocked_count += 1
+                        return ('HOLD', f'🧠 Meta-model RED: {prob*100:.0f}% < {self.meta_threshold*100:.0f}%')
                     df_disp = prediction.get('df_display')
                     candle_idx = prediction.get('candle_idx', -1)
                     allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
@@ -1220,6 +1313,8 @@ class RealAIBacktester:
         print(f"🎯 Win Rate: {len(winning)/len(self.trades)*100:.1f}%" if self.trades else "N/A")
         if self.use_meta_model:
             print(f"🧠 Meta-model engelledi: {self.meta_blocked_count} trade")
+        if self.config.fear_filter_enabled:
+            print(f"😨 Fear & Greed filtresi: {self.fear_blocked_count} sinyal için meta-model atlandı (F&G < {self.config.fear_min_threshold} veya > {self.config.fear_max_threshold})")
         if self.config.sl_cooldown_candles > 0:
             print(f"⏳ SL Cooldown engelledi: {self.sl_cooldown_blocked} sinyal ({self.config.sl_cooldown_candles} mum = {self.config.sl_cooldown_candles*15} dk)")
         
@@ -1388,16 +1483,7 @@ class RealAIBacktester:
         final_balance = self.equity_curve[-1] if self.equity_curve else self.balance
         total_pnl = ((final_balance - self.config.initial_balance) / self.config.initial_balance) * 100
         
-        # Sesli bildirim (beep)
-        try:
-            import winsound
-            # 3 kez beep
-            for _ in range(3):
-                winsound.Beep(1000, 300)
-                time.sleep(0.1)
-        except:
-            # Windows değilse print bell
-            print('\a\a\a')
+        # (beep removed)
         
         # Büyük bildirim
         result_emoji = "🎉" if total_pnl > 0 else "😢"
@@ -1413,7 +1499,7 @@ class RealAIBacktester:
 
 
 def run_comparison(coin: str, start_date: datetime, end_date: datetime, 
-                   config: SimConfig, meta_threshold: float = 0.50):
+                   config: SimConfig, meta_threshold: float = 0.30):
     """
     A/B Comparison: Meta-model OFF vs ON
     Aynı veri ve tahminlerle iki simülasyon çalıştırıp karşılaştırır.
@@ -1463,6 +1549,7 @@ def run_comparison(coin: str, start_date: datetime, end_date: datetime,
             'wins': len(winning), 'losses': len(losing),
             'win_rate': wr, 'avg_win': avg_w, 'avg_loss': avg_l,
             'blocked': getattr(bt, 'meta_blocked_count', 0),
+            'fear_blocked': getattr(bt, 'fear_blocked_count', 0),
             'cooldown_blocked': getattr(bt, 'sl_cooldown_blocked', 0)
         }
     
@@ -1490,6 +1577,7 @@ def run_comparison(coin: str, start_date: datetime, end_date: datetime,
     row("📉 Ort. Kayıp (%)", sa['avg_loss'], sb['avg_loss'], ".2f", "%")
     print(f"{'─'*73}")
     print(f"{'🧠 Meta-model engelledi':<25} {'—':>18} {sb['blocked']:>18.0f}")
+    print(f"{'😨 Fear filter: meta atlandı':<25} {'—':>18} {sb['fear_blocked']:>18.0f}")
     print(f"{'⏳ SL Cooldown engelledi':<25} {sa['cooldown_blocked']:>18.0f} {sb['cooldown_blocked']:>18.0f}")
     
     # Overall verdict
@@ -1607,8 +1695,11 @@ def main():
     # Meta-model arguments
     parser.add_argument('--meta-compare', action='store_true',
                         help='A/B comparison: meta-model ON vs OFF')
-    parser.add_argument('--meta-threshold', type=float, default=0.50,
+    parser.add_argument('--meta-threshold', type=float, default=0.30,
                         help='Meta-model threshold (default: 0.50)')
+    # Fear & Greed Index filter
+    parser.add_argument('--fear', action='store_true',
+                        help='Enable Fear & Greed Index filter (blocks meta-model when F&G < 20 or > 80)')
     
     args = parser.parse_args()
     
@@ -1624,13 +1715,33 @@ def main():
         show_live=not args.no_anim,
         hour_filter_enabled=not args.no_hour_filter,
         grid_enabled=args.grid if args.mode == 'spot' else False,
-        grid_levels=args.grid_levels
+        grid_levels=args.grid_levels,
+        fear_filter_enabled=args.fear
     )
     
     # A/B Comparison Mode
     if args.meta_compare:
         config.show_live = False  # Force no-anim for comparison
-        run_comparison(args.coin, start_date, end_date, config, args.meta_threshold)
+        if args.coin.upper() == 'ALL':
+            coins = ALL_COINS
+            print(f"\n{'='*60}")
+            print(f"🌍 Tüm coinler için Meta-Model A/B Karşılaştırma")
+            print(f"📊 {len(coins)} coin test edilecek")
+            print(f"{'='*60}\n")
+            for i, coin in enumerate(coins, 1):
+                print(f"\n{'='*60}")
+                print(f"  [{i}/{len(coins)}] {coin}")
+                print(f"{'='*60}")
+                try:
+                    run_comparison(coin, start_date, end_date, config, args.meta_threshold)
+                except Exception as e:
+                    print(f"❌ {coin} hatası: {e}")
+                    continue
+            print(f"\n{'='*60}")
+            print(f"✅ Tüm {len(coins)} coin tamamlandı!")
+            print(f"{'='*60}")
+        else:
+            run_comparison(args.coin, start_date, end_date, config, args.meta_threshold)
         return
     
     # Print mode info

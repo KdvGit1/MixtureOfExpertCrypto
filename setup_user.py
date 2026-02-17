@@ -86,6 +86,16 @@ def setup_new_user():
     
     print(f"\n📁 Kullanıcı klasörü: {user_dir}")
     
+    # Exchange Selection
+    print("\n" + "=" * 60)
+    print("🏦 BORSA SEÇİMİ")
+    print("=" * 60)
+    print("💡 Desteklenen borsalar: Binance, MEXC")
+    
+    exchange_name = get_input("Borsa seçin (binance/mexc)", "binance").lower()
+    if exchange_name not in ['binance', 'mexc']:
+        exchange_name = 'binance'
+    
     # Telegram
     print("\n" + "=" * 60)
     print("📱 TELEGRAM AYARLARI")
@@ -96,22 +106,40 @@ def setup_new_user():
     telegram_token = get_input("Telegram Bot Token")
     telegram_chat_id = get_input("Telegram Chat ID")
     
-    # Binance API
-    print("\n" + "=" * 60)
-    print("🔐 BINANCE API AYARLARI (TESTNET)")
-    print("=" * 60)
-    print("💡 Testnet key: https://testnet.binance.vision/")
+    # API Keys based on exchange
+    testnet_api_key = ""
+    testnet_api_secret = ""
+    real_api_key = ""
+    real_api_secret = ""
+    mexc_api_key = ""
+    mexc_api_secret = ""
     
-    testnet_api_key = get_input("Testnet API Key", required=False) or ""
-    testnet_api_secret = get_input("Testnet API Secret", required=False) or ""
-    
-    print("\n" + "=" * 60)
-    print("🔐 BINANCE API AYARLARI (MAINNET - Opsiyonel)")
-    print("=" * 60)
-    print("💡 Mainnet key: https://www.binance.com/en/my/settings/api-management")
-    
-    real_api_key = get_input("Mainnet API Key (boş bırakılabilir)", required=False) or ""
-    real_api_secret = get_input("Mainnet API Secret (boş bırakılabilir)", required=False) or ""
+    if exchange_name == 'mexc':
+        print("\n" + "=" * 60)
+        print("🔐 MEXC API AYARLARI")
+        print("=" * 60)
+        print("💡 MEXC API key: https://www.mexc.com/ucenter/api")
+        print("⚠️ MEXC'te testnet yoktur, doğrudan mainnet kullanılır.")
+        
+        mexc_api_key = get_input("MEXC API Key") or ""
+        mexc_api_secret = get_input("MEXC API Secret") or ""
+    else:
+        # Binance API
+        print("\n" + "=" * 60)
+        print("🔐 BINANCE API AYARLARI (TESTNET)")
+        print("=" * 60)
+        print("💡 Testnet key: https://testnet.binance.vision/")
+        
+        testnet_api_key = get_input("Testnet API Key", required=False) or ""
+        testnet_api_secret = get_input("Testnet API Secret", required=False) or ""
+        
+        print("\n" + "=" * 60)
+        print("🔐 BINANCE API AYARLARI (MAINNET - Opsiyonel)")
+        print("=" * 60)
+        print("💡 Mainnet key: https://www.binance.com/en/my/settings/api-management")
+        
+        real_api_key = get_input("Mainnet API Key (boş bırakılabilir)", required=False) or ""
+        real_api_secret = get_input("Mainnet API Secret (boş bırakılabilir)", required=False) or ""
     
     # Coins
     print("\n" + "=" * 60)
@@ -131,11 +159,20 @@ def setup_new_user():
     if trading_mode not in ['spot', 'futures']:
         trading_mode = 'spot'
     
+    # MEXC API does not support futures order placing
+    if exchange_name == 'mexc' and trading_mode == 'futures':
+        print("⚠️ MEXC API futures işlem açmayı desteklemiyor! SPOT moda geçildi.")
+        trading_mode = 'spot'
+    
     leverage = 5
     if trading_mode == 'futures':
         leverage = int(get_input("Kaldıraç (1-125)", "5"))
     
-    testnet = get_bool_input("Testnet kullan (demo trading)?", True)
+    # MEXC has no testnet
+    if exchange_name == 'mexc':
+        testnet = False
+    else:
+        testnet = get_bool_input("Testnet kullan (demo trading)?", True)
     dry_run = get_bool_input("Dry-run modu (simülasyon)?", True)
     
     max_positions = int(get_input("Maksimum pozisyon sayısı", "3"))
@@ -156,10 +193,14 @@ def setup_new_user():
     config = {
         "username": username,
         
+        "exchange_name": exchange_name,
+        
         "binance_api_key": testnet_api_key,
         "binance_api_secret": testnet_api_secret,
         "real_api_key": real_api_key,
         "real_api_secret": real_api_secret,
+        "mexc_api_key": mexc_api_key,
+        "mexc_api_secret": mexc_api_secret,
         
         "telegram_bot_token": telegram_token,
         "telegram_chat_id": telegram_chat_id,

@@ -43,6 +43,7 @@ import ccxt
 import numpy as np
 import pandas as pd
 import torch
+import requests
 
 # Telegram
 from telegram import Update, Bot
@@ -82,6 +83,13 @@ class BotConfig:
     real_api_key: str = ""
     real_api_secret: str = ""
     
+    # MEXC API Settings
+    mexc_api_key: str = ""
+    mexc_api_secret: str = ""
+    
+    # Exchange selection: "binance" or "mexc"
+    exchange_name: str = "binance"
+    
     # Telegram
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -102,9 +110,9 @@ class BotConfig:
     position_pct: float = 0.95  # 95% per position
     
     # Thresholds
-    prediction_threshold: float = 0.003  # 0.30%
-    prediction_scale: float = 0.80  # TP hedef çarpanı (backtest tp_multiplier ile aynı)
-    min_profit_to_exit: float = 0.03  # 3% min profit to exit (pozisyondan erken çıkmayı engeller)
+    prediction_threshold: float = 0.001  # 0.10% (optimized from 0.30%)
+    prediction_scale: float = 0.30  # TP hedef çarpanı (optimized from 0.80)
+    min_profit_to_exit: float = 0.01  # 1% min profit to exit (optimized from 3%)
     stop_loss_pct: float = -0.05  # Legacy - now use spot/futures specific
     min_confidence_threshold: float = 25.0  # Minimum confidence % to open trade
     
@@ -113,8 +121,8 @@ class BotConfig:
     spot_tp_pct: float = 5.0    # +5% max take profit
     
     # Futures SL/TP limits (ROE %)
-    futures_sl_pct: float = -20.0  # -20% stop loss
-    futures_tp_pct: float = 20.0   # +20% max take profit
+    futures_sl_pct: float = -5.0  # -5% stop loss (optimized from -20%)
+    futures_tp_pct: float = 5.0   # +5% max take profit (optimized from 20%)
     
     # Fees
     base_fee_rate: float = 0.001
@@ -136,8 +144,11 @@ class BotConfig:
     grid_enabled: bool = True           # Enable grid/DCA mode for spot
     grid_levels: int = 2                # Number of grid levels (2-4)
     
-    # Fear & Greed Index Filter (Futures only)
+    # Fear & Greed Index Filter
+    # When enabled, extreme fear/greed bypasses meta-model (allows trades without meta check)
     fear_greed_filter_enabled: bool = False  # Toggle via /fearfilter command
+    fear_min_threshold: int = 20             # < 20 = extreme fear
+    fear_max_threshold: int = 80             # > 80 = extreme greed
     
     # Minimum prediction threshold (skip weak signals)
     # |ai_prediction| < min_prediction_pct will be rejected
@@ -155,8 +166,8 @@ class BotConfig:
     # ========== TRAILING STOP-LOSS ==========
     # Kar artınca SL'yi yukarı taşı
     trailing_sl_enabled: bool = True
-    trailing_activation_pct: float = 3.0   # %3 ROE kârdan sonra aktif
-    trailing_distance_pct: float = 1.0     # Güncel fiyattan %1.0 geride kal (daha sıkı koruma)
+    trailing_activation_pct: float = 1.0   # %1 ROE kârdan sonra aktif (optimized from 3%) alttakiden yüksek olmalı
+    trailing_distance_pct: float = 2.0     # Güncel fiyattan %2.0 geride kal (optimized from 1%)
     
     # ========== SMART EXIT (Akıllı Çıkış) ==========
     # Ters sinyal geldiğinde çıkmadan önce sinyalin gücünü kontrol et
@@ -171,7 +182,7 @@ class BotConfig:
     
     # ========== META-MODEL GATE ==========
     meta_model_enabled: bool = True    # Meta-model trade filtresi
-    meta_model_threshold: float = 0.50  # Minimum karlılık olasılığı
+    meta_model_threshold: float = 0.30  # Minimum karlılık olasılığı (optimized from 0.50)
     
     # ========== SL COOLDOWN ==========
     sl_cooldown_candles: int = 16  # SL sonrası bekleme (16 mum = 4 saat, 15dk mumlar)
@@ -511,7 +522,14 @@ class TelegramAutoTradingBot:
         self.config = config
         self.logger = setup_logging()
         self.model_cache = ModelCache(max_size=config.max_loaded_models)
-        self.exchange: Optional[ccxt.binance] = None
+        self.exchange: Optional[ccxt.Exchange] = None
+        
+        # Initialize psutil CPU baseline (first call always returns 0)
+        try:
+            import psutil
+            psutil.cpu_percent(interval=None)  # Prime the baseline
+        except Exception:
+            pass
         self.telegram_app: Optional[Application] = None
         
         # Positions per coin
@@ -553,7 +571,7 @@ class TelegramAutoTradingBot:
                 from meta_model_gate import MetaModelGate
                 self.meta_gate = MetaModelGate(threshold=self.config.meta_model_threshold)
                 if self.meta_gate.load():
-                    self.logger.info("🧠 Meta-model gate yüklendi")
+                    self.logger.info(f"🧠 Meta-model gate yüklendi")
                 else:
                     self.meta_gate = None
                     self.logger.info("⚠️ Meta-model bulunamadı, gate devre dışı")
@@ -570,6 +588,8 @@ class TelegramAutoTradingBot:
         # Fear & Greed Index tracking
         self.fear_greed_index: int = 50  # Default neutral
         self.last_fear_greed_update: Optional[datetime] = None
+        self.fear_index_data: Dict[str, int] = {}  # {date_str: value}
+        self.fear_blocked_count: int = 0  # Signals where meta-model was skipped due to fear
         
         # SL Cooldown per-coin
         self.sl_cooldown_until: Dict[str, Optional[datetime]] = {coin: None for coin in SUPPORTED_COINS}
@@ -610,29 +630,178 @@ Komutlar: /help
         self.logger.info("⛔ Bot stopped via Telegram")
     
     def _cancel_all_orders(self, symbol: str):
-        """Cancel ALL open orders (including conditional STOP_MARKET/TAKE_PROFIT_MARKET).
-        Uses Binance cancel_all_orders API for maximum reliability."""
-        try:
-            # Method 1: cancel_all_orders (single API call, most reliable)
-            # Maps to DELETE /fapi/v1/allOpenOrders
-            self.exchange.cancel_all_orders(symbol)
-            self.logger.info(f"🗑️ Tüm emirler iptal edildi: {symbol}")
-        except AttributeError:
-            # Method 2: Fallback — fetch + cancel individually
+        """Cancel ALL open orders — scorched earth approach.
+        Binance has 'basic' and 'conditional' orders (STOP_MARKET, TAKE_PROFIT_MARKET).
+        fetch_open_orders may NOT return conditional orders, so we use every possible
+        method unconditionally to ensure nothing survives."""
+        
+        if self.config.dry_run:
+            self.logger.info(f"🎮 [DRY RUN] Would cancel all orders for {symbol}")
+            return
+        
+        is_binance_futures = (self.config.exchange_name == 'binance' and 
+                              self.config.trading_mode == 'futures')
+        
+        # ====================================================================
+        # METHOD 1: Binance fapi bulk cancel — DELETE /fapi/v1/allOpenOrders
+        # This SHOULD cancel both basic AND conditional orders in one call
+        # ====================================================================
+        if is_binance_futures:
             try:
-                open_orders = self.exchange.fetch_open_orders(symbol)
-                for order in open_orders:
-                    try:
-                        self.exchange.cancel_order(order['id'], symbol)
-                        self.logger.info(f"🗑️ Emir iptal: {order.get('type', '?')} #{order['id']}")
-                    except Exception as cancel_err:
-                        self.logger.warning(f"⚠️ Tekil iptal hatası: {cancel_err}")
-                if open_orders:
-                    self.logger.info(f"🗑️ {len(open_orders)} emir iptal edildi: {symbol}")
+                market_id = self.exchange.market_id(symbol)
+                if hasattr(self.exchange, 'fapiPrivateDeleteAllOpenOrders'):
+                    result = self.exchange.fapiPrivateDeleteAllOpenOrders({'symbol': market_id})
+                    self.logger.info(f"🗑️ [1/5] fapiPrivateDeleteAllOpenOrders → {symbol}")
+                    if result:
+                        self.logger.debug(f"   Result: {result}")
             except Exception as e:
-                self.logger.warning(f"⚠️ Emir iptal hatası: {e}")
+                if "No open orders" not in str(e) and "does not exist" not in str(e).lower():
+                    self.logger.warning(f"⚠️ [1/5] fapi bulk cancel failed: {e}")
+        
+        # ====================================================================
+        # METHOD 2: ccxt unified cancel_all_orders
+        # ====================================================================
+        try:
+            self.exchange.cancel_all_orders(symbol)
+            self.logger.info(f"🗑️ [2/5] ccxt cancel_all_orders → {symbol}")
         except Exception as e:
-            self.logger.warning(f"⚠️ cancel_all_orders hatası: {e}")
+            if "No open orders" not in str(e) and "does not exist" not in str(e).lower():
+                self.logger.warning(f"⚠️ [2/5] ccxt cancel_all_orders failed: {e}")
+        
+        # ====================================================================
+        # METHOD 3: Binance fapi — fetch ALL orders (basic + conditional) and
+        # cancel each individually via fapiPrivateDeleteOrder
+        # This is the KEY method because fapiPrivateGetOpenOrders returns
+        # STOP_MARKET and TAKE_PROFIT_MARKET that ccxt fetch_open_orders misses
+        # ====================================================================
+        if is_binance_futures:
+            try:
+                market_id = self.exchange.market_id(symbol)
+                if hasattr(self.exchange, 'fapiPrivateGetOpenOrders'):
+                    fapi_orders = self.exchange.fapiPrivateGetOpenOrders({'symbol': market_id})
+                    if fapi_orders and len(fapi_orders) > 0:
+                        self.logger.info(f"📋 [3/5] fapi found {len(fapi_orders)} orders (basic+conditional)")
+                        for fo in fapi_orders:
+                            order_id = fo.get('orderId', '')
+                            order_type = fo.get('type', '?')
+                            order_side = fo.get('side', '?')
+                            try:
+                                # Direct fapi cancel — works for ALL order types
+                                self.exchange.fapiPrivateDeleteOrder({
+                                    'symbol': market_id,
+                                    'orderId': int(order_id)
+                                })
+                                self.logger.info(f"🗑️ [3/5] Cancelled {order_type} {order_side} #{order_id}")
+                            except Exception as cancel_err:
+                                err = str(cancel_err)
+                                if "Unknown order" not in err and "does not exist" not in err.lower():
+                                    self.logger.warning(f"⚠️ [3/5] Cancel #{order_id} failed: {cancel_err}")
+                    else:
+                        self.logger.info(f"✅ [3/5] fapi: No orders found for {symbol}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ [3/5] fapi fetch+cancel failed: {e}")
+        
+        # ====================================================================
+        # METHOD 4: ccxt fetch_open_orders (regular + stop) and cancel each
+        # Backup for non-Binance or if fapi missed something
+        # ====================================================================
+        try:
+            all_order_ids = set()
+            
+            # 4a. Regular orders
+            try:
+                regular = self.exchange.fetch_open_orders(symbol)
+                for o in regular:
+                    all_order_ids.add(str(o.get('id', '')))
+                if regular:
+                    self.logger.info(f"📋 [4/5] fetch_open_orders: {len(regular)} regular orders")
+            except Exception:
+                pass
+            
+            # 4b. Stop/conditional orders via ccxt param
+            try:
+                stops = self.exchange.fetch_open_orders(symbol, params={'stop': True})
+                for o in stops:
+                    all_order_ids.add(str(o.get('id', '')))
+                if stops:
+                    self.logger.info(f"📋 [4/5] fetch_open_orders(stop): {len(stops)} stop orders")
+            except Exception:
+                pass
+            
+            # Cancel each found order
+            for oid in all_order_ids:
+                if not oid:
+                    continue
+                try:
+                    self.exchange.cancel_order(oid, symbol)
+                    self.logger.info(f"🗑️ [4/5] Cancelled #{oid}")
+                except Exception as e:
+                    err = str(e)
+                    if "Unknown order" not in err and "does not exist" not in err.lower():
+                        # Last resort: direct fapi
+                        if is_binance_futures and hasattr(self.exchange, 'fapiPrivateDeleteOrder'):
+                            try:
+                                market_id = self.exchange.market_id(symbol)
+                                self.exchange.fapiPrivateDeleteOrder({
+                                    'symbol': market_id, 'orderId': int(oid)
+                                })
+                                self.logger.info(f"🗑️ [4/5] Force-cancelled #{oid} via fapi")
+                            except Exception:
+                                pass
+            
+            if not all_order_ids:
+                self.logger.info(f"✅ [4/5] ccxt fetch: No orders found")
+        except Exception as e:
+            self.logger.warning(f"⚠️ [4/5] general error: {e}")
+        
+        # ====================================================================
+        # METHOD 5: VERIFICATION — wait and re-check via fapi
+        # If anything survives all the above, try one final time
+        # ====================================================================
+        try:
+            import time
+            time.sleep(0.3)
+            
+            remaining_ids = []
+            
+            # Use fapi directly for verification (most reliable source of truth)
+            if is_binance_futures and hasattr(self.exchange, 'fapiPrivateGetOpenOrders'):
+                try:
+                    market_id = self.exchange.market_id(symbol)
+                    remaining = self.exchange.fapiPrivateGetOpenOrders({'symbol': market_id})
+                    if remaining:
+                        remaining_ids = [(str(o.get('orderId', '')), o.get('type', '?')) for o in remaining]
+                except Exception:
+                    pass
+            
+            # Fallback to ccxt
+            if not remaining_ids:
+                try:
+                    ccxt_remaining = self.exchange.fetch_open_orders(symbol)
+                    if ccxt_remaining:
+                        remaining_ids = [(str(o.get('id', '')), o.get('type', '?')) for o in ccxt_remaining]
+                except Exception:
+                    pass
+            
+            if remaining_ids:
+                self.logger.warning(f"⚠️ [5/5] STILL {len(remaining_ids)} orders after cancel!")
+                for oid, otype in remaining_ids:
+                    self.logger.warning(f"   ❗ Surviving: {otype} #{oid}")
+                    try:
+                        if is_binance_futures and hasattr(self.exchange, 'fapiPrivateDeleteOrder'):
+                            market_id = self.exchange.market_id(symbol)
+                            self.exchange.fapiPrivateDeleteOrder({
+                                'symbol': market_id, 'orderId': int(oid)
+                            })
+                        else:
+                            self.exchange.cancel_order(oid, symbol)
+                        self.logger.info(f"🗑️ [5/5] Final cancel #{oid}")
+                    except Exception:
+                        self.logger.error(f"❌ [5/5] FAILED to cancel #{oid} — manual intervention needed!")
+            else:
+                self.logger.info(f"✅ [5/5] Verified: All orders cleared for {symbol}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ [5/5] Verification error: {e}")
     
     def _get_public_ip(self) -> str:
         """Get public IP address."""
@@ -650,7 +819,13 @@ Komutlar: /help
         """Get CPU, RAM, uptime and IP for /status command."""
         try:
             import psutil
-            cpu_pct = psutil.cpu_percent(interval=0.5)
+            # Use interval=1 for accurate reading; if still 0, try per-cpu average
+            cpu_pct = psutil.cpu_percent(interval=1.0)
+            if cpu_pct == 0.0:
+                # Fallback: average of per-CPU readings
+                per_cpu = psutil.cpu_percent(interval=0.5, percpu=True)
+                if per_cpu:
+                    cpu_pct = sum(per_cpu) / len(per_cpu)
             ram = psutil.virtual_memory()
             ram_used = ram.used / (1024**3)
             ram_total = ram.total / (1024**3)
@@ -769,6 +944,7 @@ Komutlar: /help
 <b>💼 Cüzdan & Mod</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 • Bakiye: ${usdt_balance:,.2f} USDT
+• Borsa: {self._get_exchange_label()}
 • Network: {network_emoji}
 • Trading: {mode_emoji}{leverage_text}
 • İşlem: {dryrun_text}
@@ -780,7 +956,14 @@ Komutlar: /help
 • Günlük P&L: {self.daily_pnl_pct:+.2f}% (Limit: {self.config.daily_loss_limit_pct}%)
 • Trade: {self.daily_trades}/{self.config.max_daily_trades}
 • Güven Eşiği: %{self.config.min_confidence_threshold:.0f}
-• Fear Filter: {'✅ Açık' if self.config.fear_greed_filter_enabled else '❌ Kapalı'} (Index: {self.fear_greed_index})
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>🧠 Meta Model & Fear Filter</b>
+━━━━━━━━━━━━━━━━━━━━━━
+• Meta Model: {'✅ Açık' if self.config.meta_model_enabled else '❌ Kapalı'}
+• Fear Filter: {'✅ Açık' if self.config.fear_greed_filter_enabled else '❌ Kapalı'}
+• Güncel F&G Index: {self.fear_greed_index}
+• Meta Atlandı: {self.fear_blocked_count} sinyal
 
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>🕐 Saat Filtresi</b>
@@ -863,7 +1046,14 @@ Komutlar: /help
 ━━━━━━━━━━━━━━━━━━━━━━
 /close BTC - BTC pozisyonunu kapat
 /close all - Tüm pozisyonları kapat
-/sync - Binance ile senkronize et
+/sync - Borsa ile senkronize et
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>🏦 BORSA SEÇİMİ</b>
+━━━━━━━━━━━━━━━━━━━━━━
+/exchange - Aktif borsa göster
+/exchange binance - Binance'e geç
+/exchange mexc - MEXC'e geç
 
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>📜 GEÇMİŞ & GÜVENLİK</b>
@@ -962,6 +1152,11 @@ Komutlar: /help
     
     async def cmd_futures(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Switch to futures trading mode."""
+        # MEXC does not support futures order placing via API
+        if self.config.exchange_name == 'mexc':
+            await update.message.reply_text("❌ MEXC API'si futures işlem açmayı desteklemiyor!\n\nFutures için /exchange binance ile Binance'e geçin.")
+            return
+        
         # Parse leverage from args
         leverage = 5  # Default
         if context.args:
@@ -988,6 +1183,109 @@ Komutlar: /help
         await update.message.reply_text(f"🟡 <b>FUTURES {leverage}x</b> moduna geçildi!", parse_mode='HTML')
         await self.send_notification(f"🟡 Trading modu: <b>FUTURES {leverage}x</b>")
         self.logger.info(f"🟡 Switched to FUTURES {leverage}x mode")
+    
+    async def cmd_exchange(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /exchange command - Switch between Binance and MEXC."""
+        supported = ['binance', 'mexc']
+        current = self.config.exchange_name
+        label = self._get_exchange_label()
+        
+        # No argument: show current exchange
+        if not context.args:
+            msg = f"""
+🏦 <b>Borsa Ayarları</b>
+
+• Aktif Borsa: <b>{label}</b>
+• Desteklenen: {', '.join(s.upper() for s in supported)}
+
+<b>Değiştirmek için:</b>
+<code>/exchange binance</code>
+<code>/exchange mexc</code>
+"""
+            await update.message.reply_text(msg.strip(), parse_mode='HTML')
+            return
+        
+        target = context.args[0].lower()
+        if target not in supported:
+            await update.message.reply_text(f"❌ Desteklenmeyen borsa: {target}\n\nDesteklenen: {', '.join(supported)}")
+            return
+        
+        if target == current:
+            await update.message.reply_text(f"🏦 Zaten <b>{label}</b> kullanıyorsunuz.", parse_mode='HTML')
+            return
+        
+        # Check for open positions
+        open_positions = sum(1 for p in self.positions.values() if p.side != "FLAT")
+        if open_positions > 0:
+            await update.message.reply_text(f"⚠️ Borsa değiştirmek için önce {open_positions} açık pozisyonu kapatın.")
+            return
+        
+        # Switch exchange and API keys
+        self.config.exchange_name = target
+        
+        if target == 'mexc':
+            # MEXC: use MEXC API keys, no testnet
+            if not self.config.mexc_api_key or not self.config.mexc_api_secret:
+                self.config.exchange_name = current  # Rollback
+                await update.message.reply_text(
+                    "❌ MEXC API anahtarları ayarlanmamış!\n\n"
+                    ".env dosyasına MEXC_API_KEY ve MEXC_API_SECRET ekleyin."
+                )
+                return
+            self.config.api_key = self.config.mexc_api_key
+            self.config.api_secret = self.config.mexc_api_secret
+            self.config.testnet = False  # MEXC has no testnet
+            # MEXC only supports spot trading via API
+            if self.config.trading_mode == 'futures':
+                self.config.trading_mode = 'spot'
+                self.logger.info("⚠️ MEXC does not support futures API, switched to SPOT")
+        else:
+            # Binance: restore Binance API keys
+            if self.config.dry_run or self.config.testnet:
+                # Use testnet keys
+                env_path = PROJECT_ROOT / '.env'
+                env = load_env(env_path)
+                self.config.api_key = env.get('BINANCE_API_KEY', '')
+                self.config.api_secret = env.get('BINANCE_API_SECRET', '')
+            else:
+                # Use real keys
+                self.config.api_key = self.config.real_api_key
+                self.config.api_secret = self.config.real_api_secret
+        
+        # Reinitialize exchange
+        try:
+            success = self.initialize_exchange()
+            if not success:
+                raise Exception("Exchange initialization returned False")
+        except Exception as e:
+            # Rollback
+            self.config.exchange_name = current
+            error_msg = str(e)
+            await update.message.reply_text(
+                f"❌ {target.upper()}'e bağlanılamadı!\n\n"
+                f"<b>Hata:</b> <code>{error_msg}</code>\n\n"
+                f"{label}'a geri dönüldü.",
+                parse_mode='HTML'
+            )
+            self.logger.error(f"Exchange switch to {target} failed: {e}")
+            return
+        
+        new_label = self._get_exchange_label()
+        is_futures = self.config.trading_mode == 'futures'
+        mode_str = f"FUTURES {self.config.leverage}x" if is_futures else "SPOT"
+        
+        msg = f"""
+🏦 <b>Borsa Değiştirildi!</b>
+
+• Borsa: <b>{new_label}</b>
+• Mod: {mode_str}
+• Network: {'Testnet' if self.config.testnet else 'Mainnet'}
+
+✅ Bağlantı başarılı!
+"""
+        await update.message.reply_text(msg.strip(), parse_mode='HTML')
+        await self.send_notification(f"🏦 Borsa değiştirildi: <b>{new_label}</b>")
+        self.logger.info(f"🏦 Switched to {new_label}")
     
     async def cmd_demo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Switch to demo mode (testnet + dry run)."""
@@ -1033,7 +1331,12 @@ Gerçek moda geçmek için: /real
             return
         
         # Check if real API keys are configured
-        if not self.config.real_api_key or not self.config.real_api_secret:
+        if self.config.exchange_name == 'mexc':
+            # MEXC is always mainnet, check MEXC keys
+            if not self.config.mexc_api_key or not self.config.mexc_api_secret:
+                await update.message.reply_text("❌ MEXC API anahtarları ayarlanmamış!\n\n.env dosyasına MEXC_API_KEY ve MEXC_API_SECRET ekleyin.")
+                return
+        elif not self.config.real_api_key or not self.config.real_api_secret:
             await update.message.reply_text("❌ Gerçek API anahtarları ayarlanmamış!\n\n.env dosyasına REAL_API_KEY ve REAL_API_SECRET ekleyin.")
             return
         
@@ -1047,7 +1350,7 @@ Gerçek moda geçmek için: /real
             msg = """
 ⚠️ <b>DİKKAT: GERÇEK PARA!</b>
 
-Bu komut gerçek Binance hesabınızla işlem yapacak!
+Bu komut gerçek {self._get_exchange_label()} hesabınızla işlem yapacak!
 Gerçek paranızı kaybedebilirsiniz!
 
 Onaylamak için yazın:
@@ -1059,8 +1362,8 @@ Onaylamak için yazın:
         # Switch to real mode
         self.config.testnet = False
         self.config.dry_run = False
-        self.config.api_key = self.config.real_api_key
-        self.config.api_secret = self.config.real_api_secret
+        self.config.api_key = self.config.mexc_api_key if self.config.exchange_name == 'mexc' else self.config.real_api_key
+        self.config.api_secret = self.config.mexc_api_secret if self.config.exchange_name == 'mexc' else self.config.real_api_secret
         
         # Reinitialize exchange with real credentials
         try:
@@ -1925,10 +2228,15 @@ Tüm pozisyonlar Binance ile uyumlu."""
 📈 <b>Piyasa:</b> {sentiment}
 
 ⚙️ <b>Filtre:</b> {'✅ Açık' if self.config.fear_greed_filter_enabled else '❌ Kapalı'}
+📊 <b>Meta Atlandı:</b> {self.fear_blocked_count} sinyal
 
-<b>Filtre Kuralları (Futures):</b>
-• Fear &lt; 20: LONG engellenir, sadece SHORT
-• Greed &gt; 80: SHORT engellenir, sadece LONG
+<b>Filtre Kuralları:</b>
+• Fear &lt; {self.config.fear_min_threshold}: Meta-model atlanır
+• Greed &gt; {self.config.fear_max_threshold}: Meta-model atlanır
+• Normal seviyede: Meta-model aktif
+
+<i>Not: Extreme durumlarda meta-model devre dışı kalır,
+trade'ler normal AI tahminlerine göre yapılır.</i>
 """
             await update.message.reply_text(msg.strip(), parse_mode='HTML')
             return
@@ -1944,9 +2252,13 @@ Tüm pozisyonlar Binance ile uyumlu."""
 📊 Güncel Index: {fear_index}
 
 ⚙️ <b>Aktif Kurallar:</b>
-• Fear &lt; 20: LONG engellenir
-• Greed &gt; 80: SHORT engellenir
-• Sadece Futures modunda çalışır
+• Fear &lt; {self.config.fear_min_threshold}: Meta-model atlanır
+• Greed &gt; {self.config.fear_max_threshold}: Meta-model atlanır
+• Normal seviye: Meta-model çalışır
+
+<i>Extreme piyasa duyarlılığı dönemlerinde meta-model
+kontrolü atlanır ve trade'ler normal AI tahminlerine
+göre yapılır. Trade'ler engellenmez.</i>
 
 Kapatmak için: /fearfilter
 Detay için: /fearfilter status
@@ -2180,10 +2492,15 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
     
     # ========== EXCHANGE ==========
     
+    def _get_exchange_label(self) -> str:
+        """Get display name for current exchange."""
+        return "Binance" if self.config.exchange_name == 'binance' else "MEXC"
+    
     def initialize_exchange(self) -> bool:
-        """Initialize Binance connection for spot or futures."""
+        """Initialize exchange connection for spot or futures."""
         try:
             is_futures = self.config.trading_mode == 'futures'
+            exchange_name = self.config.exchange_name.lower()
             
             params = {
                 'apiKey': self.config.api_key,
@@ -2194,29 +2511,34 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 }
             }
             
-            if self.config.testnet:
-                params['options']['sandboxMode'] = True
-                if is_futures:
-                    # Binance Futures testnet
-                    params['urls'] = {
-                        'api': {
-                            'public': 'https://testnet.binancefuture.com',
-                            'private': 'https://testnet.binancefuture.com',
+            if exchange_name == 'mexc':
+                # ===== MEXC =====
+                # MEXC has no testnet/sandbox mode
+                self.exchange = ccxt.mexc(params)
+                
+            else:
+                # ===== BINANCE (default) =====
+                if self.config.testnet:
+                    params['options']['sandboxMode'] = True
+                    if is_futures:
+                        params['urls'] = {
+                            'api': {
+                                'public': 'https://testnet.binancefuture.com',
+                                'private': 'https://testnet.binancefuture.com',
+                            }
                         }
-                    }
-                else:
-                    # Binance Spot testnet
-                    params['urls'] = {
-                        'api': {
-                            'public': 'https://testnet.binance.vision/api',
-                            'private': 'https://testnet.binance.vision/api',
+                    else:
+                        params['urls'] = {
+                            'api': {
+                                'public': 'https://testnet.binance.vision/api',
+                                'private': 'https://testnet.binance.vision/api',
+                            }
                         }
-                    }
-            
-            self.exchange = ccxt.binance(params)
-            
-            if self.config.testnet:
-                self.exchange.set_sandbox_mode(True)
+                
+                self.exchange = ccxt.binance(params)
+                
+                if self.config.testnet:
+                    self.exchange.set_sandbox_mode(True)
             
             self.exchange.load_markets()
             
@@ -2230,9 +2552,10 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                     except Exception as e:
                         self.logger.warning(f"Could not set leverage for {coin}: {e}")
             
+            label = self._get_exchange_label()
             mode_str = f"{'FUTURES ' + str(self.config.leverage) + 'x' if is_futures else 'SPOT'}"
-            net_str = 'Testnet' if self.config.testnet else 'Mainnet'
-            self.logger.info(f"✅ Connected to Binance {net_str} ({mode_str})")
+            net_str = 'Testnet' if self.config.testnet and exchange_name == 'binance' else 'Mainnet'
+            self.logger.info(f"✅ Connected to {label} {net_str} ({mode_str})")
             return True
             
         except Exception as e:
@@ -2377,6 +2700,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         pos.entry_time = None
                         pos.entry_prediction = 0.0
                         pos.trade_id = None
+                        pos.reset_grid()  # Reset trailing SL and grid fields
                         
                         closed_on_exchange.append(coin)
                         
@@ -2629,6 +2953,48 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         
         return self.fear_greed_index
     
+    def load_fear_greed_historical(self, days: int = 200):
+        """
+        Load historical Fear & Greed Index data.
+        Populates self.fear_index_data with {date_str: value}.
+        """
+        try:
+            url = f"https://api.alternative.me/fng/?limit={days}&format=json"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            self.fear_index_data = {}
+            for item in data.get('data', []):
+                timestamp = int(item['timestamp'])
+                date_obj = datetime.fromtimestamp(timestamp)
+                date_str = date_obj.strftime('%Y-%m-%d')
+                fear_value = int(item['value'])
+                self.fear_index_data[date_str] = fear_value
+            
+            self.logger.info(f"📊 Fear & Greed Index historical data loaded: {len(self.fear_index_data)} days")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Fear & Greed historical data yüklenemedi: {e}")
+            self.fear_index_data = {}
+    
+    def is_fear_index_extreme(self, timestamp: datetime) -> Tuple[bool, int]:
+        """
+        Check if Fear & Greed Index is in extreme state (< 20 or > 80).
+        Returns: (is_extreme, fear_value)
+        """
+        if not self.config.fear_greed_filter_enabled:
+            return False, 50
+        
+        # If historical data not loaded, load it now
+        if not self.fear_index_data:
+            self.load_fear_greed_historical()
+        
+        date_str = timestamp.strftime('%Y-%m-%d')
+        fear_value = self.fear_index_data.get(date_str, 50)  # Default to neutral if not found
+        
+        is_extreme = fear_value < self.config.fear_min_threshold or fear_value > self.config.fear_max_threshold
+        return is_extreme, fear_value
+    
     # ========== TRADING LOGIC ==========
 
     
@@ -2648,11 +3014,22 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         
         # ========== META-MODEL GATE ==========
         if self.meta_gate and self.config.meta_model_enabled and pos.side == "FLAT":
-            df_disp = prediction.get('df_display')
-            candle_idx = len(df_disp) - 1 if df_disp is not None else -1
-            allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
-            if not allow:
-                return ('HOLD', f'🧠 Meta-model: düşük karlılık ({prob*100:.0f}% < {self.config.meta_model_threshold*100:.0f}%)')
+            # Check if fear index is extreme - if so, skip meta model check
+            skip_meta = False
+            if self.config.fear_greed_filter_enabled:
+                timestamp = prediction.get('timestamp', datetime.now())
+                is_extreme, fear_value = self.is_fear_index_extreme(timestamp)
+                if is_extreme:
+                    skip_meta = True
+                    self.fear_blocked_count += 1
+                    self.logger.info(f"😨 {coin}: Fear index extreme ({fear_value}), meta-model atlandı")
+            
+            if not skip_meta:
+                df_disp = prediction.get('df_display')
+                candle_idx = len(df_disp) - 1 if df_disp is not None else -1
+                allow, prob = self.meta_gate.should_allow_trade(prediction, df_disp, candle_idx)
+                if not allow:
+                    return ('HOLD', f'🧠 Meta-model: düşük karlılık ({prob*100:.0f}% < {self.config.meta_model_threshold*100:.0f}%)')
         
         # ========== HOUR FILTER ==========
         # Block new position entries during blocked hours (existing positions can still be managed)
@@ -2682,21 +3059,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if current_pnl <= sl_limit:
                 return ('SELL_ALL', f'🛑 Stop-Loss: {current_pnl*100:.2f}%')
             
-            # Trailing stop-loss check (soft, in should_trade)
-            if self.config.trailing_sl_enabled and hasattr(pos, 'trailing_sl_price') and pos.trailing_sl_price > 0:
-                if price <= pos.trailing_sl_price:
-                    trail_pnl = ((pos.trailing_sl_price - avg_price) / avg_price) * 100 if avg_price > 0 else 0
-                    return ('SELL_ALL', f'🔒 Trailing SL: {trail_pnl:+.2f}%')
-            
-            # Update trailing SL if profit exceeds activation threshold
-            if self.config.trailing_sl_enabled and current_pnl * 100 >= self.config.trailing_activation_pct:
-                new_sl = price * (1 - self.config.trailing_distance_pct / 100)
-                min_sl = avg_price * 1.002  # At least 0.2% above avg entry
-                if not hasattr(pos, 'trailing_sl_price'):
-                    pos.trailing_sl_price = 0.0
-                if new_sl > min_sl and new_sl > pos.trailing_sl_price:
-                    pos.trailing_sl_price = new_sl
-                    self.logger.info(f"🔒 {coin}: Trailing SL güncellendi: ${new_sl:,.2f} (PnL: {current_pnl*100:+.2f}%)")
+
             
             # ========== SMART EXIT: Bearish + profit in grid mode ==========
             if pred < 0 and current_pnl >= self.config.min_profit_to_exit:
@@ -2744,27 +3107,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if current_pnl <= sl_limit:
                 return ('SELL', f'🛑 Stop-Loss: {current_pnl*100:.2f}%')
             
-            # Trailing stop-loss check (internal)
-            if self.config.trailing_sl_enabled and hasattr(pos, 'trailing_sl_price') and pos.trailing_sl_price > 0:
-                if price <= pos.trailing_sl_price:
-                    trail_pnl = ((pos.trailing_sl_price - pos.entry_price) / pos.entry_price) * 100 * (self.config.leverage if is_futures else 1)
-                    return ('SELL', f'🔒 Trailing SL: {trail_pnl:+.2f}%')
-            
-            # Update trailing SL internally
-            if self.config.trailing_sl_enabled and current_pnl * 100 >= self.config.trailing_activation_pct:
-                distance_factor = self.config.trailing_distance_pct / 100
-                if is_futures:
-                    distance_factor /= self.config.leverage
-                new_sl = price * (1 - distance_factor)
-                min_sl = pos.entry_price * 1.002  # At least 0.2% above entry
-                if not hasattr(pos, 'trailing_sl_price'):
-                    pos.trailing_sl_price = 0.0
-                if new_sl > min_sl and new_sl > pos.trailing_sl_price:
-                    old_sl = pos.trailing_sl_price
-                    pos.trailing_sl_price = new_sl
-                    self.logger.info(f"🔒 {coin}: Trailing SL güncellendi: ${new_sl:,.4f} (was: ${old_sl:,.4f}, ROE: {current_pnl*100:+.2f}%)")
-                    # Notify via Telegram
-                    asyncio.ensure_future(self.send_notification(f"🔒 {coin} Trailing SL: ${new_sl:,.4f} (ROE: {current_pnl*100:+.2f}%)"))
+
             
             # Take profit
             target_tp = abs(pos.entry_prediction) if pos.entry_prediction else tp_max
@@ -2863,25 +3206,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if current_pnl <= sl_limit:
                 return ('CLOSE_SHORT', f'🛑 Stop-Loss: {current_pnl*100:.2f}%')
             
-            # Trailing stop-loss check (internal) for SHORT
-            if self.config.trailing_sl_enabled and hasattr(pos, 'trailing_sl_price') and pos.trailing_sl_price > 0:
-                if price >= pos.trailing_sl_price:
-                    trail_pnl = ((pos.entry_price - pos.trailing_sl_price) / pos.entry_price) * 100 * self.config.leverage
-                    return ('CLOSE_SHORT', f'🔒 Trailing SL: {trail_pnl:+.2f}%')
-            
-            # Update trailing SL internally for SHORT
-            if self.config.trailing_sl_enabled and current_pnl * 100 >= self.config.trailing_activation_pct:
-                distance_factor = self.config.trailing_distance_pct / self.config.leverage / 100
-                new_sl = price * (1 + distance_factor)
-                max_sl = pos.entry_price * 0.998  # At least 0.2% below entry
-                if not hasattr(pos, 'trailing_sl_price'):
-                    pos.trailing_sl_price = 0.0
-                if (pos.trailing_sl_price == 0 or new_sl < pos.trailing_sl_price) and new_sl < max_sl:
-                    old_sl = pos.trailing_sl_price
-                    pos.trailing_sl_price = new_sl
-                    self.logger.info(f"🔒 {coin}: SHORT Trailing SL güncellendi: ${new_sl:,.4f} (was: ${old_sl:,.4f}, ROE: {current_pnl*100:+.2f}%)")
-                    # Notify via Telegram
-                    asyncio.ensure_future(self.send_notification(f"🔒 {coin} SHORT Trailing SL: ${new_sl:,.4f} (ROE: {current_pnl*100:+.2f}%)"))
+
             
             # Take profit
             target_tp = abs(pos.entry_prediction) if pos.entry_prediction else tp_max
@@ -2984,18 +3309,6 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             if open_count >= self.config.max_positions:
                 return ('HOLD', 'Max pozisyon limiti')
             
-            # ========== FEAR & GREED FILTER (Futures only) ==========
-            if is_futures and self.config.fear_greed_filter_enabled:
-                fear_index = self.get_fear_greed_index()
-                
-                # Extreme Fear (<20): Block LONG, allow SHORT only
-                if fear_index < 20 and pred > threshold:
-                    return ('HOLD', f'🛡️ Fear Filter: Korku={fear_index}, LONG engellendi')
-                
-                # Extreme Greed (>80): Block SHORT, allow LONG only
-                if fear_index > 80 and pred < -threshold:
-                    return ('HOLD', f'🛡️ Fear Filter: Açgözlülük={fear_index}, SHORT engellendi')
-            
             # LONG signal (positive prediction)
             if pred > threshold:
                 # ========== CONFIDENCE FILTER FOR LONG ==========
@@ -3072,6 +3385,9 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                            (f" (margin: ${net_usdt:.2f}, leverage: {self.config.leverage}x)" if is_futures else ""))
             
             if not self.config.dry_run:
+                # Cancel pending orders before opening new position
+                self._cancel_all_orders(symbol)
+                
                 self.exchange.create_market_buy_order(symbol, amount)
                 
                 # === SAFETY NET: Exchange-level SL/TP orders ===
@@ -3092,7 +3408,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                             type='STOP_MARKET',
                             side='sell',
                             amount=amount,
-                            params={'stopPrice': sl_price, 'closePosition': False}
+                            params={('stopPrice' if self.config.exchange_name == 'binance' else 'triggerPrice'): sl_price, 'closePosition': True, 'reduceOnly': True}
                         )
                         self.logger.info(f"🛡️ {coin} LONG Safety SL: ${sl_price:,.5f}")
                         
@@ -3102,7 +3418,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                             type='TAKE_PROFIT_MARKET',
                             side='sell',
                             amount=amount,
-                            params={'stopPrice': tp_price, 'closePosition': False}
+                            params={('stopPrice' if self.config.exchange_name == 'binance' else 'triggerPrice'): tp_price, 'closePosition': True, 'reduceOnly': True}
                         )
                         self.logger.info(f"🛡️ {coin} LONG Safety TP: ${tp_price:,.5f}")
                     except Exception as sltp_err:
@@ -3144,106 +3460,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.error(f"Buy error for {coin}: {e}")
             return False
     
-    async def update_trailing_sl(self) -> None:
-        """
-        Update trailing stop-loss for open positions.
-        When profit exceeds trailing_activation_pct, move SL up to lock in profits.
-        """
-        if not self.config.trailing_sl_enabled:
-            return
-        
-        if self.config.trading_mode != 'futures':
-            return  # Trailing SL only for futures
-        
-        # NOTE: Exchange-level trailing SL orders DISABLED
-        # Trailing SL is now managed internally in should_trade()
-        return
-        
-        for coin, pos in self.positions.items():
-            if pos.side not in ["LONG", "SHORT"]:
-                continue
-            
-            try:
-                symbol = f"{coin}/USDT:USDT"
-                current_price = self.get_current_price(symbol)
-                if not current_price:
-                    continue
-                
-                # Calculate current ROE (with leverage)
-                if pos.side == "LONG":
-                    pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100 * self.config.leverage
-                else:  # SHORT
-                    pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100 * self.config.leverage
-                
-                # Only activate trailing SL when profit exceeds threshold
-                if pnl_pct < self.config.trailing_activation_pct:
-                    continue
-                
-                # Calculate new SL price
-                # For LONG: SL = current_price * (1 - trailing_distance_pct / leverage / 100)
-                # For SHORT: SL = current_price * (1 + trailing_distance_pct / leverage / 100)
-                distance_factor = (self.config.trailing_distance_pct / self.config.leverage) / 100
-                
-                if pos.side == "LONG":
-                    new_sl_price = current_price * (1 - distance_factor)
-                    # SL should be above entry price to lock in profit
-                    min_sl = pos.entry_price * (1 + 0.002)  # At least 0.2% above entry
-                    if new_sl_price < min_sl:
-                        continue  # Don't move SL lower than break-even
-                else:  # SHORT
-                    new_sl_price = current_price * (1 + distance_factor)
-                    # SL should be below entry price for SHORT
-                    max_sl = pos.entry_price * (1 - 0.002)  # At least 0.2% below entry
-                    if new_sl_price > max_sl:
-                        continue  # Don't move SL higher than break-even
-                
-                # Check if we have an existing SL order
-                try:
-                    open_orders = self.exchange.fetch_open_orders(symbol)
-                    existing_sl = None
-                    for order in open_orders:
-                        order_type = order.get('type', '').lower()
-                        if order_type in ['stop_market', 'stop']:
-                            existing_sl = order
-                            break
-                    
-                    if existing_sl:
-                        # Check if new SL is better than existing
-                        existing_sl_price = float(existing_sl.get('stopPrice', 0))
-                        
-                        if pos.side == "LONG":
-                            # For LONG, new SL should be higher than existing
-                            if new_sl_price <= existing_sl_price:
-                                continue  # Existing SL is already higher
-                        else:  # SHORT
-                            # For SHORT, new SL should be lower than existing
-                            if new_sl_price >= existing_sl_price:
-                                continue  # Existing SL is already lower
-                        
-                        # Cancel old SL
-                        self.exchange.cancel_order(existing_sl['id'], symbol)
-                        self.logger.info(f"🔄 {coin}: Trailing SL - eski SL iptal ({existing_sl_price:.4f})")
-                    
-                    # Place new SL order
-                    side = 'sell' if pos.side == "LONG" else 'buy'
-                    sl_order = self.exchange.create_order(
-                        symbol=symbol,
-                        type='STOP_MARKET',
-                        side=side,
-                        amount=pos.amount,
-                        params={
-                            'stopPrice': new_sl_price,
-                            'reduceOnly': True
-                        }
-                    )
-                    
-                    self.logger.info(f"🔒 {coin}: Trailing SL güncellendi: {new_sl_price:.4f} (ROE: {pnl_pct:+.2f}%)")
-                    
-                except Exception as e:
-                    self.logger.warning(f"Trailing SL order error {coin}: {e}")
-                    
-            except Exception as e:
-                self.logger.warning(f"Trailing SL error {coin}: {e}")
+
     
     async def execute_sell(self, coin: str, reason: str) -> bool:
         """Execute sell order."""
@@ -3276,7 +3493,44 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 if self.config.trading_mode == 'futures':
                     self._cancel_all_orders(symbol)
                 
-                self.exchange.create_market_sell_order(symbol, amount)
+                if self.config.trading_mode == 'futures':
+                    try:
+                        self.exchange.create_market_sell_order(symbol, amount, params={'reduceOnly': True})
+                    except Exception as order_err:
+                        err_str = str(order_err).lower()
+                        if 'reduce only' in err_str or 'reduceonly' in err_str or 'position side does not match' in err_str:
+                            self.logger.warning(f"⚠️ {coin}: reduceOnly reddedildi — pozisyon Binance'te zaten kapatılmış!")
+                            try:
+                                await self.sync_positions_with_exchange()
+                            except Exception:
+                                pass
+                            await self.send_notification(
+                                f"⚠️ <b>{coin} LONG Close</b>\n\n"
+                                f"Pozisyon Binance tarafından zaten kapatılmış (safety SL/TP)\n"
+                                f"✅ Bot senkronize edildi"
+                            )
+                        else:
+                            raise
+                    
+                    # === POST-CLOSE SAFETY: Check for accidental reverse position ===
+                    try:
+                        import time
+                        time.sleep(0.3)
+                        exchange_positions = self.get_exchange_positions()
+                        if coin in exchange_positions:
+                            ep = exchange_positions[coin]
+                            if ep['side'] != 'LONG':  # We closed LONG, if SHORT exists it's accidental
+                                self.logger.error(f"❌ REVERSE POSITION DETECTED: {coin} {ep['side']}! Closing immediately.")
+                                self.exchange.create_market_buy_order(symbol, ep['amount'], params={'reduceOnly': True})
+                                asyncio.ensure_future(self.send_notification(
+                                    f"❌ <b>{coin}: Ters pozisyon tespit edildi!</b>\n\n"
+                                    f"📊 {ep['side']} {ep['amount']:.6f} @ ${ep.get('entry_price', 0):,.4f}\n"
+                                    f"✅ Otomatik kapatıldı (reduceOnly)"
+                                ))
+                    except Exception as verify_err:
+                        self.logger.warning(f"⚠️ Post-close verification failed for {coin}: {verify_err}")
+                else:
+                    self.exchange.create_market_sell_order(symbol, amount)
             
             # Update stats
             self.cumulative_pnl_pct += pnl_pct
@@ -3580,7 +3834,11 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                     futures_symbol = f"{coin}/USDT:USDT"
                     self._cancel_all_orders(futures_symbol)
                 
-                self.exchange.create_market_sell_order(symbol, amount)
+                if self.config.trading_mode == 'futures':
+                    futures_symbol = f"{coin}/USDT:USDT"
+                    self.exchange.create_market_sell_order(futures_symbol, amount, params={'reduceOnly': True})
+                else:
+                    self.exchange.create_market_sell_order(symbol, amount)
             
             # Update stats
             self.cumulative_pnl_pct += pnl_pct
@@ -3807,6 +4065,9 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
             self.logger.info(f"📉 SHORT {coin}: {amount:.6f} @ ${price:,.5f} (margin: ${net_usdt:.2f}, leverage: {self.config.leverage}x)")
             
             if not self.config.dry_run:
+                # Cancel pending orders before opening new SHORT
+                self._cancel_all_orders(symbol)
+                
                 self.exchange.create_market_sell_order(symbol, amount)
                 
                 # === SAFETY NET: Exchange-level SL/TP orders ===
@@ -3826,7 +4087,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         type='STOP_MARKET',
                         side='buy',
                         amount=amount,
-                        params={'stopPrice': sl_price, 'closePosition': False}
+                        params={('stopPrice' if self.config.exchange_name == 'binance' else 'triggerPrice'): sl_price, 'closePosition': True, 'reduceOnly': True}
                     )
                     self.logger.info(f"🛡️ {coin} SHORT Safety SL: ${sl_price:,.5f}")
                     
@@ -3836,7 +4097,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         type='TAKE_PROFIT_MARKET',
                         side='buy',
                         amount=amount,
-                        params={'stopPrice': tp_price, 'closePosition': False}
+                        params={('stopPrice' if self.config.exchange_name == 'binance' else 'triggerPrice'): tp_price, 'closePosition': True, 'reduceOnly': True}
                     )
                     self.logger.info(f"🛡️ {coin} SHORT Safety TP: ${tp_price:,.5f}")
                 except Exception as sltp_err:
@@ -3941,7 +4202,43 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                 # Cancel any pending TP/SL orders first
                 self._cancel_all_orders(symbol)
                 
-                self.exchange.create_market_buy_order(symbol, amount)
+                try:
+                    self.exchange.create_market_buy_order(symbol, amount, params={'reduceOnly': True})
+                except Exception as order_err:
+                    err_str = str(order_err).lower()
+                    # reduceOnly rejection = position already closed by Binance safety order
+                    if 'reduce only' in err_str or 'reduceonly' in err_str or 'position side does not match' in err_str:
+                        self.logger.warning(f"⚠️ {coin}: reduceOnly reddedildi — pozisyon Binance'te zaten kapatılmış!")
+                        # Sync state and continue with internal bookkeeping
+                        try:
+                            await self.sync_positions_with_exchange()
+                        except Exception:
+                            pass
+                        await self.send_notification(
+                            f"⚠️ <b>{coin} SHORT Close</b>\n\n"
+                            f"Pozisyon Binance tarafından zaten kapatılmış (safety SL/TP)\n"
+                            f"✅ Bot senkronize edildi"
+                        )
+                    else:
+                        raise  # Re-raise unexpected errors
+                
+                # === POST-CLOSE SAFETY: Check for accidental reverse position ===
+                try:
+                    import time
+                    time.sleep(0.3)
+                    exchange_positions = self.get_exchange_positions()
+                    if coin in exchange_positions:
+                        ep = exchange_positions[coin]
+                        if ep['side'] != 'SHORT':  # We closed SHORT, if LONG exists it's accidental
+                            self.logger.error(f"❌ REVERSE POSITION DETECTED: {coin} {ep['side']}! Closing immediately.")
+                            self.exchange.create_market_sell_order(symbol, ep['amount'], params={'reduceOnly': True})
+                            asyncio.ensure_future(self.send_notification(
+                                f"❌ <b>{coin}: Ters pozisyon tespit edildi!</b>\n\n"
+                                f"📊 {ep['side']} {ep['amount']:.6f} @ ${ep.get('entry_price', 0):,.4f}\n"
+                                f"✅ Otomatik kapatıldı (reduceOnly)"
+                            ))
+                except Exception as verify_err:
+                    self.logger.warning(f"⚠️ Post-close verification failed for {coin}: {verify_err}")
             
             # Update stats
             self.cumulative_pnl_pct += pnl_pct
@@ -4059,7 +4356,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         Runs as asyncio task alongside trading_loop.
         Exchange safety SL/TP orders provide protection when bot/asyncio is blocked.
         """
-        self.logger.info("🔒 SL Monitor başlatıldı (15s interval)")
+        self.logger.info("🔒 SL Monitor başlatıldı (5s interval)")
         
         while True:
             try:
@@ -4076,6 +4373,9 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                     sl_limit = self.config.spot_sl_pct / 100
                 
                 for coin, pos in list(self.positions.items()):
+                    # Double check position wasn't closed by another task
+                    if pos.side == "FLAT": # Added check for race conditions
+                        continue
                     if pos.side not in ["LONG", "SHORT"]:
                         continue
                     
@@ -4084,15 +4384,128 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                     if price is None:
                         continue
                     
-                    current_pnl = pos.pnl_pct(price) / 100
+                    # USE AVERAGE ENTRY PRICE FOR CALCULATIONS
+                    # Especially important for Grid Trading where multiple buys exist
+                    if not is_futures and pos.grid_entries:
+                        entry_for_calc = pos.avg_entry_price()
+                    else:
+                        entry_for_calc = pos.entry_price
+                    
+                    if entry_for_calc <= 0:
+                        continue
+
+                    # Recalculate PnL based on correct entry price
+                    if pos.side == "LONG":
+                        current_pnl = ((price - entry_for_calc) / entry_for_calc)
+                    else:
+                        current_pnl = ((entry_for_calc - price) / entry_for_calc)
+                    
                     if is_futures:
                         current_pnl *= leverage
                     
+                    # ==========================================
+                    # 🔄 TRAILING SL UPDATE (Real-time)
+                    # ==========================================
+                    if self.config.trailing_sl_enabled and current_pnl * 100 >= self.config.trailing_activation_pct:
+                        distance_factor = (self.config.trailing_distance_pct / leverage) / 100
+                        
+                        # UPDATE LONG TRAILING SL
+                        if pos.side == "LONG":
+                            new_sl = price * (1 - distance_factor)
+                            min_sl = entry_for_calc * 1.002
+                            
+                            if new_sl > min_sl:
+                                if not hasattr(pos, 'trailing_sl_price') or pos.trailing_sl_price == 0:
+                                    pos.trailing_sl_price = new_sl
+                                    self.logger.info(f"🔒 {coin}: Trailing SL başlatıldı (Monitor): ${new_sl:,.4f}")
+                                    asyncio.ensure_future(self.send_notification(f"🔒 {coin} Trailing SL Başladı: ${new_sl:,.4f} (ROE: {current_pnl*100:.2f}%)"))
+                                elif new_sl > pos.trailing_sl_price:
+                                    pos.trailing_sl_price = new_sl
+                                    self.logger.info(f"🔒 {coin}: Trailing SL yükseltildi (Monitor): ${new_sl:,.4f}")
+
+                        # UPDATE SHORT TRAILING SL
+                        elif pos.side == "SHORT":
+                            new_sl = price * (1 + distance_factor)
+                            max_sl = entry_for_calc * 0.998
+                            
+                            if new_sl < max_sl:
+                                if not hasattr(pos, 'trailing_sl_price') or pos.trailing_sl_price == 0:
+                                    pos.trailing_sl_price = new_sl
+                                    self.logger.info(f"🔒 {coin}: SHORT Trailing SL başlatıldı (Monitor): ${new_sl:,.4f}")
+                                    asyncio.ensure_future(self.send_notification(f"🔒 {coin} SHORT Trailing SL Başladı: ${new_sl:,.4f} (ROE: {current_pnl*100:.2f}%)"))
+                                elif new_sl < pos.trailing_sl_price:
+                                    pos.trailing_sl_price = new_sl
+                                    self.logger.info(f"🔒 {coin}: SHORT Trailing SL düşürüldü (Monitor): ${new_sl:,.4f}")
+
+                    # ==========================================
+                    # 📊 TRAILING SL STATUS LOG (Terminal)
+                    # ==========================================
+                    if self.config.trailing_sl_enabled:
+                        tsl_active = hasattr(pos, 'trailing_sl_price') and pos.trailing_sl_price > 0
+                        
+                        # Calculate distances
+                        sl_dist_pct = 0.0
+                        if is_futures:
+                            # Distance to hard SL (sl_limit is negative, e.g. -0.20)
+                            # LONG SL: Entry * (1 + (-0.20/leverage)) -> Entry * (1 - 0.04)
+                            # SHORT SL: Entry * (1 - (-0.20/leverage)) -> Entry * (1 + 0.04)
+                            sl_price = entry_for_calc * (1 + sl_limit/leverage) if pos.side == "LONG" else entry_for_calc * (1 - sl_limit/leverage)
+                            sl_dist_pct = abs((price - sl_price) / price) * 100
+                        else:
+                            sl_dist_pct = abs(current_pnl - sl_limit) * 100 # Approx for spot
+                        
+                        log_msg = ""
+                        if tsl_active:
+                            # Distance to TSL
+                            tsl_dist = abs((price - pos.trailing_sl_price) / price) * 100
+                            log_msg = f"{coin} TSL: ACTIVE | TSL Dist: {tsl_dist:.2f}% | SL Dist: {sl_dist_pct:.2f}%"
+                        else:
+                            # Distance to Activation
+                            # Activation triggers when PnL% >= trailing_activation_pct
+                            current_roe = current_pnl * 100
+                            needed = self.config.trailing_activation_pct - current_roe
+                            if needed > 0:
+                                log_msg = f"{coin} TSL: Inactive (Need +{needed:.2f}%) | SL Dist: {sl_dist_pct:.2f}%"
+                            else:
+                                log_msg = f"{coin} TSL: Inactive (Ready to trigger) | SL Dist: {sl_dist_pct:.2f}%"
+                        
+                        # Print to terminal
+                        # User requested terminal output. Logger info usually goes to terminal too.
+                        self.logger.info(f"📊 {log_msg}")
+
                     # ---- LONG position checks ----
                     if pos.side == "LONG":
                         if current_pnl <= sl_limit:
                             reason = f'🛑 Stop-Loss (monitor): {current_pnl*100:.2f}%'
                             self.logger.info(f"🛑 SL Monitor: {coin} LONG SL tetiklendi @ ${price:,.4f}")
+                            
+                            # === CRITICAL: Check if position still exists on Binance ===
+                            # Binance safety SL order may have already closed the position.
+                            # If we blindly call execute_sell(), it creates a new SHORT position!
+                            if not self.config.dry_run:
+                                try:
+                                    exchange_positions = self.get_exchange_positions()
+                                    if coin not in exchange_positions:
+                                        self.logger.warning(f"⚠️ SL Monitor: {coin} pozisyonu Binance'te zaten kapatılmış! Emir gönderilmeyecek.")
+                                        # Activate SL cooldown
+                                        if self.config.sl_cooldown_candles > 0:
+                                            cooldown_minutes = self.config.sl_cooldown_candles * 15
+                                            self.sl_cooldown_until[coin] = datetime.now() + timedelta(minutes=cooldown_minutes)
+                                            self.logger.info(f"⏳ {coin}: SL Cooldown aktif — {cooldown_minutes}dk")
+                                        # Sync to properly record the trade and reset internal state
+                                        await self.sync_positions_with_exchange()
+                                        await self.send_notification(
+                                            f"🛑 <b>{coin} LONG Stop-Loss</b>\n\n"
+                                            f"📊 SL seviyesine ulaşıldı ({current_pnl*100:.2f}%)\n"
+                                            f"⚠️ Pozisyon Binance tarafından zaten kapatılmış (safety SL emri)\n"
+                                            f"✅ Bot pozisyonu senkronize edildi"
+                                            + (f"\n⏳ SL Cooldown: {cooldown_minutes}dk" if self.config.sl_cooldown_candles > 0 else "")
+                                        )
+                                        continue
+                                except Exception as sync_err:
+                                    self.logger.warning(f"⚠️ SL Monitor sync check failed for {coin}: {sync_err}")
+                                    # On sync failure, proceed with execute_sell as fallback
+                            
                             await self.execute_sell(coin, reason)
                             continue
                         
@@ -4100,9 +4513,26 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                             and hasattr(pos, 'trailing_sl_price') 
                             and pos.trailing_sl_price > 0 
                             and price <= pos.trailing_sl_price):
-                            trail_pnl = ((pos.trailing_sl_price - pos.entry_price) / pos.entry_price) * 100 * leverage
+                            trail_pnl = ((pos.trailing_sl_price - entry_for_calc) / entry_for_calc) * 100 * leverage
                             reason = f'🔒 Trailing SL (monitor): {trail_pnl:+.2f}%'
                             self.logger.info(f"🔒 SL Monitor: {coin} LONG Trailing SL @ ${price:,.4f} (SL: ${pos.trailing_sl_price:,.4f})")
+                            
+                            # === CRITICAL: Check if position still exists on Binance ===
+                            if not self.config.dry_run:
+                                try:
+                                    exchange_positions = self.get_exchange_positions()
+                                    if coin not in exchange_positions:
+                                        self.logger.warning(f"⚠️ SL Monitor: {coin} LONG pozisyonu Binance'te zaten kapatılmış (TSL)!")
+                                        await self.sync_positions_with_exchange()
+                                        await self.send_notification(
+                                            f"🔒 <b>{coin} LONG Trailing SL</b>\n\n"
+                                            f"⚠️ Pozisyon Binance tarafından zaten kapatılmış\n"
+                                            f"✅ Bot pozisyonu senkronize edildi"
+                                        )
+                                        continue
+                                except Exception as sync_err:
+                                    self.logger.warning(f"⚠️ TSL sync check failed for {coin}: {sync_err}")
+                            
                             await self.execute_sell(coin, reason)
                             continue
                     
@@ -4111,6 +4541,34 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         if current_pnl <= sl_limit:
                             reason = f'🛑 Stop-Loss (monitor): {current_pnl*100:.2f}%'
                             self.logger.info(f"🛑 SL Monitor: {coin} SHORT SL tetiklendi @ ${price:,.4f}")
+                            
+                            # === CRITICAL: Check if position still exists on Binance ===
+                            # Binance safety SL order may have already closed the position.
+                            # If we blindly call close_short(), it creates a new LONG position!
+                            if not self.config.dry_run:
+                                try:
+                                    exchange_positions = self.get_exchange_positions()
+                                    if coin not in exchange_positions:
+                                        self.logger.warning(f"⚠️ SL Monitor: {coin} SHORT pozisyonu Binance'te zaten kapatılmış! Emir gönderilmeyecek.")
+                                        # Activate SL cooldown
+                                        if self.config.sl_cooldown_candles > 0:
+                                            cooldown_minutes = self.config.sl_cooldown_candles * 15
+                                            self.sl_cooldown_until[coin] = datetime.now() + timedelta(minutes=cooldown_minutes)
+                                            self.logger.info(f"⏳ {coin}: SL Cooldown aktif — {cooldown_minutes}dk")
+                                        # Sync to properly record the trade and reset internal state
+                                        await self.sync_positions_with_exchange()
+                                        await self.send_notification(
+                                            f"🛑 <b>{coin} SHORT Stop-Loss</b>\n\n"
+                                            f"📊 SL seviyesine ulaşıldı ({current_pnl*100:.2f}%)\n"
+                                            f"⚠️ Pozisyon Binance tarafından zaten kapatılmış (safety SL emri)\n"
+                                            f"✅ Bot pozisyonu senkronize edildi"
+                                            + (f"\n⏳ SL Cooldown: {cooldown_minutes}dk" if self.config.sl_cooldown_candles > 0 else "")
+                                        )
+                                        continue
+                                except Exception as sync_err:
+                                    self.logger.warning(f"⚠️ SL Monitor sync check failed for {coin}: {sync_err}")
+                                    # On sync failure, proceed with close_short as fallback
+                            
                             await self.close_short(coin, reason)
                             continue
                         
@@ -4118,9 +4576,26 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                             and hasattr(pos, 'trailing_sl_price') 
                             and pos.trailing_sl_price > 0 
                             and price >= pos.trailing_sl_price):
-                            trail_pnl = ((pos.entry_price - pos.trailing_sl_price) / pos.entry_price) * 100 * leverage
+                            trail_pnl = ((entry_for_calc - pos.trailing_sl_price) / entry_for_calc) * 100 * leverage
                             reason = f'🔒 Trailing SL (monitor): {trail_pnl:+.2f}%'
                             self.logger.info(f"🔒 SL Monitor: {coin} SHORT Trailing SL @ ${price:,.4f} (SL: ${pos.trailing_sl_price:,.4f})")
+                            
+                            # === CRITICAL: Check if position still exists on Binance ===
+                            if not self.config.dry_run:
+                                try:
+                                    exchange_positions = self.get_exchange_positions()
+                                    if coin not in exchange_positions:
+                                        self.logger.warning(f"⚠️ SL Monitor: {coin} SHORT pozisyonu Binance'te zaten kapatılmış (TSL)!")
+                                        await self.sync_positions_with_exchange()
+                                        await self.send_notification(
+                                            f"🔒 <b>{coin} SHORT Trailing SL</b>\n\n"
+                                            f"⚠️ Pozisyon Binance tarafından zaten kapatılmış\n"
+                                            f"✅ Bot pozisyonu senkronize edildi"
+                                        )
+                                        continue
+                                except Exception as sync_err:
+                                    self.logger.warning(f"⚠️ TSL sync check failed for {coin}: {sync_err}")
+                            
                             await self.close_short(coin, reason)
                             continue
                 
@@ -4148,11 +4623,11 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                     except Exception as ip_err:
                         self.logger.debug(f"IP check failed: {ip_err}")
                 
-                await asyncio.sleep(15)
+                await asyncio.sleep(5)
                 
             except Exception as e:
                 self.logger.error(f"SL Monitor error: {e}")
-                await asyncio.sleep(15)
+                await asyncio.sleep(5)
     
     # ========== MAIN LOOP ==========
     
@@ -4245,9 +4720,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                         synced, closed_coins = await self.sync_positions_with_exchange()
                         if closed_coins:
                             self.logger.info(f"🔄 Manuel kapatma algılandı: {', '.join(closed_coins)}")
-                        
-                        # Update trailing stop-losses for profitable positions
-                        await self.update_trailing_sl()
+                    
                     
                     # Calculate total portfolio value (free USDT + open positions)
                     # This is used for proper position sizing
@@ -4359,7 +4832,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                                 if trade_amount > usdt_balance:
                                     trade_amount = usdt_balance * 0.95
                                 if trade_amount > 5:
-                                    await asyncio.sleep(0.5)  # Brief pause for exchange
+                                    await asyncio.sleep(1.0)  # Safe balance update delay
                                     flip_success = await self.execute_short(coin, trade_amount, prediction)
                                     if flip_success:
                                         await self.send_notification(f"🔄 {coin} FLIP başarılı: LONG → SHORT")
@@ -4379,7 +4852,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
                                 if trade_amount > usdt_balance:
                                     trade_amount = usdt_balance * 0.95
                                 if trade_amount > 5:
-                                    await asyncio.sleep(0.5)  # Brief pause for exchange
+                                    await asyncio.sleep(1.0)  # Safe balance update delay
                                     flip_success = await self.execute_buy(coin, trade_amount, prediction)
                                     if flip_success:
                                         await self.send_notification(f"🔄 {coin} FLIP başarılı: SHORT → LONG")
@@ -4438,6 +4911,7 @@ Açık Pozisyonlar: {sum(1 for p in self.positions.values() if p.side == "LONG")
         self.telegram_app.add_handler(CommandHandler("sync", self.cmd_sync))
         self.telegram_app.add_handler(CommandHandler("fearfilter", self.cmd_fearfilter))
         self.telegram_app.add_handler(CommandHandler("hours", self.cmd_hours))
+        self.telegram_app.add_handler(CommandHandler("exchange", self.cmd_exchange))
         
         # Start Telegram
         await self.telegram_app.initialize()
@@ -4506,6 +4980,9 @@ def main():
         api_secret=env.get('BINANCE_API_SECRET', ''),
         real_api_key=env.get('REAL_API_KEY', ''),
         real_api_secret=env.get('REAL_API_SECRET', ''),
+        mexc_api_key=env.get('MEXC_API_KEY', ''),
+        mexc_api_secret=env.get('MEXC_API_SECRET', ''),
+        exchange_name=env.get('EXCHANGE', 'binance').lower(),
         telegram_bot_token=env.get('TELEGRAM_BOT_TOKEN', ''),
         telegram_chat_id=env.get('TELEGRAM_CHAT_ID', ''),
         testnet=env.get('TESTNET', 'true').lower() == 'true',
@@ -4517,9 +4994,9 @@ def main():
         default_timeframe=env.get('DEFAULT_TIMEFRAME', '15m'),
         max_positions=int(env.get('MAX_POSITIONS', '5')),
         position_pct=float(env.get('POSITION_PCT', '0.20')),
-        prediction_threshold=float(env.get('PREDICTION_THRESHOLD', '0.003')),
-        prediction_scale=float(env.get('PREDICTION_SCALE', '0.5')),
-        min_profit_to_exit=float(env.get('MIN_PROFIT_TO_EXIT', '0.0025')),
+        prediction_threshold=float(env.get('PREDICTION_THRESHOLD', '0.001')),
+        prediction_scale=float(env.get('PREDICTION_SCALE', '0.30')),
+        min_profit_to_exit=float(env.get('MIN_PROFIT_TO_EXIT', '0.01')),
         stop_loss_pct=float(env.get('STOP_LOSS_PCT', '-0.05')),
         max_loaded_models=int(env.get('MAX_LOADED_MODELS', '5')),
         # Safety limits
@@ -4527,6 +5004,16 @@ def main():
         max_daily_trades=int(env.get('MAX_DAILY_TRADES', '20')),
         min_balance_usdt=float(env.get('MIN_BALANCE_USDT', '50.0'))
     )
+    
+    # If MEXC is selected and has keys, swap active API keys
+    if config.exchange_name == 'mexc' and config.mexc_api_key:
+        config.api_key = config.mexc_api_key
+        config.api_secret = config.mexc_api_secret
+        config.testnet = False  # MEXC has no testnet
+        # MEXC API does not support futures order placing
+        if config.trading_mode == 'futures':
+            config.trading_mode = 'spot'
+            print("⚠️ MEXC API futures desteklemiyor, SPOT moduna geçildi.")
     
     # Check required settings
     if not config.telegram_bot_token or config.telegram_bot_token == 'your_bot_token_here':
