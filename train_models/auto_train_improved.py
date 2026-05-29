@@ -129,7 +129,8 @@ def objective(trial):
     criterion = nn.HuberLoss(delta=0.5)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=5, factor=0.7)
-    scaler = torch.amp.GradScaler("cuda")
+    is_cuda = (DEVICE.type == 'cuda')
+    scaler = torch.amp.GradScaler(device_type="cuda", enabled=is_cuda)
 
     best_val = float("inf")
 
@@ -141,7 +142,7 @@ def objective(trial):
             for batch in train_loader:
                 x_cnn = batch["x_cnn"].to(DEVICE); x_lstm = batch["x_lstm"].to(DEVICE); x_tr = batch["x_tr"].to(DEVICE); y = batch["y"].to(DEVICE)
                 optimizer.zero_grad()
-                with torch.amp.autocast("cuda"):
+                with torch.amp.autocast(device_type=("cuda" if is_cuda else "cpu"), enabled=is_cuda):
                     p_main, p_cnn, p_lstm, p_tr = model(x_cnn, x_lstm, x_tr)
                     y_s = y * 100.0
                     # Stats kısmını burada kullanmıyoruz ama fonksiyon değiştiği için almamız lazım
@@ -159,7 +160,7 @@ def objective(trial):
             with torch.no_grad():
                 for batch in val_loader:
                     x_cnn = batch["x_cnn"].to(DEVICE); x_lstm = batch["x_lstm"].to(DEVICE); x_tr = batch["x_tr"].to(DEVICE); y = batch["y"].to(DEVICE)
-                    with torch.amp.autocast("cuda"):
+                    with torch.amp.autocast(device_type=("cuda" if is_cuda else "cpu"), enabled=is_cuda):
                         p_main, _, _, _ = model(x_cnn, x_lstm, x_tr)
                         val_loss_acc += criterion(p_main, y * 100.0).item()
 
@@ -192,7 +193,8 @@ def train_best_model(best_params):
     criterion = nn.HuberLoss(delta=0.5)
     optimizer = optim.AdamW(model.parameters(), lr=best_params["learning_rate"])
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=7, factor=0.7)
-    scaler = torch.amp.GradScaler("cuda")
+    is_cuda = (DEVICE.type == 'cuda')
+    scaler = torch.amp.GradScaler(device_type="cuda", enabled=is_cuda)
 
     best_val = float("inf")
     history = [] # Tüm verileri burada biriktireceğiz
@@ -209,7 +211,7 @@ def train_best_model(best_params):
         for batch in train_loader:
             x_cnn = batch["x_cnn"].to(DEVICE); x_lstm = batch["x_lstm"].to(DEVICE); x_tr = batch["x_tr"].to(DEVICE); y = batch["y"].to(DEVICE)
             optimizer.zero_grad()
-            with torch.amp.autocast("cuda"):
+            with torch.amp.autocast(device_type=("cuda" if is_cuda else "cpu"), enabled=is_cuda):
                 p_main, p_cnn, p_lstm, p_tr = model(x_cnn, x_lstm, x_tr)
                 y_s = y * 100.0
                 # Hem Loss'u hem İstatistikleri (Stats) alıyoruz
@@ -236,7 +238,7 @@ def train_best_model(best_params):
         with torch.no_grad():
             for batch in val_loader:
                 x_cnn = batch["x_cnn"].to(DEVICE); x_lstm = batch["x_lstm"].to(DEVICE); x_tr = batch["x_tr"].to(DEVICE); y = batch["y"].to(DEVICE)
-                with torch.amp.autocast("cuda"):
+                with torch.amp.autocast(device_type=("cuda" if is_cuda else "cpu"), enabled=is_cuda):
                     p_main, _, _, _ = model(x_cnn, x_lstm, x_tr)
                     val_loss_acc += criterion(p_main, y * 100.0).item()
 

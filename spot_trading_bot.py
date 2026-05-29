@@ -36,7 +36,7 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from train_models.data_fetcher import get_crypto_history, prepare_dual_dataframes
-from train_models.CryptoMoeApp.ai_engine_improved import MultiBranchModel, CNN_FEATURES, LSTM_FEATURES, TR_FEATURES
+from train_models.ai_engine_improved import MultiBranchModel, CNN_FEATURES, LSTM_FEATURES, TR_FEATURES
 
 # ============================================
 # CONFIGURATION

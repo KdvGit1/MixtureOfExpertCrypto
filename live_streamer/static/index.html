@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ Crypto MoE Live Analysis Battle Arena</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="stream-overlay">
+        <!-- Canvas for ambient crypto particle effects and signal alerts -->
+        <canvas id="particlesCanvas"></canvas>
+
+        <!-- TOP BAR: Live Status HUD -->
+        <header class="hud-header">
+            <div class="hud-brand">
+                <span class="pulse-core"></span>
+                <span class="hud-title">MOE CORE</span>
+                <span class="hud-subtitle">v3.5 LIVE SCENE</span>
+            </div>
+            
+            <div class="marquee-wrapper">
+                <div class="marquee-content" id="marqueeCrawl">
+                    🚀 MIXTURE OF EXPERTS NEURAL ENGINE ONLINE • CNN COGNITIVE REFLEXES: ACTIVE • LSTM TREND HISTORIAN: ACTIVE • TRANSFORMER MACRO REGIME SCANNER: ACTIVE • SCANNING BINANCE PERPETUAL CONTRACTS...
+                </div>
+            </div>
+
+            <div class="hud-status">
+                <span class="status-indicator online"></span>
+                <span class="status-text" id="statusText">WEBSOCKET ONLINE</span>
+                <button class="lang-btn" id="langToggle" title="Change Language">🇹🇷 TR</button>
+                <button class="sound-toggle-btn" id="soundToggle" title="Toggle Sound FX">🔊</button>
+                <button class="settings-btn" id="settingsToggle" title="Configure System Settings">⚙️</button>
+            </div>
+        </header>
+
+        <!-- BATTLE ARENA: Premium 3-Column layout (ETH Price - Bots Status - Trading chronicle stats) -->
+        <main class="battle-arena">
+            <!-- COLUMN 1: ETH Battle Card -->
+            <section class="battle-card coin-eth" id="card-ETH">
+                <div class="card-glow"></div>
+                <div class="coin-header">
+                    <div class="coin-name-wrapper">
+                        <span class="coin-symbol">ETH</span>
+                        <span class="coin-label" id="eth-label">ETHEREUM PRO</span>
+                    </div>
+                    <div class="coin-change-badge" id="eth-change">0.00%</div>
+                </div>
+
+                <div class="coin-price-section">
+                    <div class="coin-price" id="eth-price">$0.00</div>
+                    <div class="price-limits">
+                        <span>H: <span id="eth-high">$0.00</span></span>
+                        <span>L: <span id="eth-low">$0.00</span></span>
+                    </div>
+                </div>
+
+                <!-- Realtime Tick-by-tick Canvas Chart -->
+                <div class="chart-container">
+                    <canvas id="ethChart"></canvas>
+                </div>
+
+                <!-- Actionable Trading Setup levels -->
+                <div class="trading-setup-hud">
+                    <h4 id="eth-setup-title">📊 LIVE TRADING SETUP SCANNER</h4>
+                    <div class="setup-levels-grid">
+                        <div class="setup-row">
+                            <span id="eth-entry-lbl" class="setup-label">Recommended Entry</span>
+                            <strong id="eth-entry-val" class="text-cyan">$0.00</strong>
+                        </div>
+                        <div class="setup-row">
+                            <span id="eth-tp1-lbl" class="setup-label">Take Profit 1 (TP1)</span>
+                            <strong id="eth-tp1-val" class="text-green">$0.00</strong>
+                        </div>
+                        <div class="setup-row">
+                            <span id="eth-tp2-lbl" class="setup-label">Take Profit 2 (TP2)</span>
+                            <strong id="eth-tp2-val" class="text-green">$0.00</strong>
+                        </div>
+                        <div class="setup-row">
+                            <span id="eth-sl-lbl" class="setup-label">Stop Loss (SL)</span>
+                            <strong id="eth-sl-val" class="text-pink">$0.00</strong>
+                        </div>
+                    </div>
+                    <!-- Active Mixture of Experts Path -->
+                    <div class="active-expert-path">
+                        <span class="path-label" id="eth-path-lbl">DOMINANT BRANCH:</span>
+                        <strong class="path-value text-gold" id="eth-dominant-path">CNN Scalper</strong>
+                    </div>
+                </div>
+
+                <!-- Signal Display Overlay -->
+                <div class="signal-hud" id="eth-signal-box">
+                    <div class="signal-label" id="eth-dec-label">DECISION GATE</div>
+                    <div class="signal-value" id="eth-signal">WAITING...</div>
+                    <div class="signal-subtext" id="eth-signal-desc">Synchronizing analysis matrix</div>
+                </div>
+            </section>
+
+            <!-- COLUMN 2: Autonomous Neural Bots Cards -->
+            <!-- COLUMN 2: Autonomous Neural BOTS & Setup Stats -->
+            <section class="idle-game-card" id="card-BOTS">
+                <div class="card-glow" style="background: var(--neon-gold); opacity: 0.12;"></div>
+                
+                <div class="arena-header">
+                    <h2 id="arena-title">🤖 NEURAL AUTONOMOUS SIMULATOR</h2>
+                    <p class="arena-desc" id="arena-desc">Live MoE Agent Trading Simulation</p>
+                </div>
+
+                <!-- Portfolio Stats and Active Positions (Moved to Middle) -->
+                <div class="simulation-stats-panel" style="margin-top: 10px; background: none; border: none; padding: 0; display: flex; flex-direction: column; gap: 8px;">
+                    <div class="stats-header-hud">
+                        <div class="total-portfolio-val">
+                            <span id="lbl-total-bal">PORTFOLIO VAL:</span>
+                            <strong id="sim-total-bal">$30,000.00</strong>
+                        </div>
+                        <div class="total-pnl-pct" id="sim-total-pnl-box">
+                            <span id="lbl-pnl-change">CHANGE:</span>
+                            <strong id="sim-total-pnl-pct">0.00%</strong>
+                        </div>
+                    </div>
+
+                    <!-- Side-by-side horizontal layout -->
+                    <div class="stats-grids-split" style="display: flex; gap: 12px; margin-top: 4px; align-items: stretch;">
+                        <!-- Active Open Positions List -->
+                        <div class="active-positions-hud" style="flex: 1;">
+                            <h4 id="lbl-open-pos-title">⚡ ACTIVE OPEN POSITIONS</h4>
+                            <div class="active-positions-list" id="activePositionsList">
+                                <div class="no-positions" id="noPositionsMsg">No active open positions.</div>
+                            </div>
+                        </div>
+
+                        <!-- Last 5 Closed Trades Grid (Renamed to Last 5 Trades) -->
+                        <div class="closed-trades-hud" style="flex: 1;">
+                            <h4 id="lbl-closed-trades-title">📊 LAST 5 TRADES</h4>
+                            <table class="closed-trades-table">
+                                <thead>
+                                    <tr>
+                                        <th id="th-bot">Agent</th>
+                                        <th id="th-asset">Asset</th>
+                                        <th id="th-dir">Dir</th>
+                                        <th id="th-pnl">PnL%</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="closedTradesTableBody">
+                                    <!-- Closed trades history populated by app.js -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Animated Visual Traders Area (At bottom) -->
+                <div class="bots-grid-wrapper" style="margin-top: 15px;">
+                    <!-- CNN Agent -->
+                    <div class="bot-card" id="bot-cnn">
+                        <div class="bot-status-ring"></div>
+                        <div class="bot-avatar">⚡</div>
+                        <div class="bot-info">
+                            <span class="bot-name" id="bot1-name">CNN Reflex Bot</span>
+                            <span class="bot-role" id="bot1-role">High-Frequency Scalping</span>
+                            <div class="bot-stats">
+                                <span class="stat-pnl" id="bot1-pnl">PnL: 0.00%</span>
+                                <span class="stat-bal" id="bot1-bal">$10,000.00</span>
+                            </div>
+                        </div>
+                        <div class="bot-trade-badge FLAT" id="bot1-badge">FLAT</div>
+                    </div>
+
+                    <!-- LSTM Agent -->
+                    <div class="bot-card" id="bot-lstm">
+                        <div class="bot-status-ring"></div>
+                        <div class="bot-avatar">📈</div>
+                        <div class="bot-info">
+                            <span class="bot-name" id="bot2-name">LSTM Historian Bot</span>
+                            <span class="bot-role" id="bot2-role">Trend-Following Swing</span>
+                            <div class="bot-stats">
+                                <span class="stat-pnl" id="bot2-pnl">PnL: 0.00%</span>
+                                <span class="stat-bal" id="bot2-bal">$10,000.00</span>
+                            </div>
+                        </div>
+                        <div class="bot-trade-badge FLAT" id="bot2-badge">FLAT</div>
+                    </div>
+
+                    <!-- Transformer Agent -->
+                    <div class="bot-card" id="bot-tr">
+                        <div class="bot-status-ring"></div>
+                        <div class="bot-avatar">🔮</div>
+                        <div class="bot-info">
+                            <span class="bot-name" id="bot3-name">Transformer Macro Bot</span>
+                            <span class="bot-role" id="bot3-role">Macro regime breakout</span>
+                            <div class="bot-stats">
+                                <span class="stat-pnl" id="bot3-pnl">PnL: 0.00%</span>
+                                <span class="stat-bal" id="bot3-bal">$10,000.00</span>
+                            </div>
+                        </div>
+                        <div class="bot-trade-badge FLAT" id="bot3-badge">FLAT</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- COLUMN 3: Dedicated Live Chronicle Terminal -->
+            <section class="idle-game-card" id="card-CHRONICLE" style="border-color: var(--neon-cyan); box-shadow: 0 0 20px rgba(0, 240, 255, 0.05); display: flex; flex-direction: column; height: 100%;">
+                <div class="card-glow" style="background: var(--neon-cyan); opacity: 0.08;"></div>
+                
+                <!-- Live Orders Log (Visual Chronicle Feed - Taking full height) -->
+                <div class="orders-log-panel" style="flex-grow: 1; height: 100%; display: flex; flex-direction: column; margin-top: 0; background: none; border: none; padding: 0;">
+                    <h3 id="feed-title" style="font-size: 0.95rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px; margin-bottom: 12px; font-family: var(--font-header);">📜 LIVE SIMULATION CHRONICLE</h3>
+                    <div class="orders-feed" id="ordersFeed" style="flex-grow: 1; font-size: 0.75rem; line-height: 1.4; overflow-y: auto;">
+                        <!-- Log items dynamically added by javascript -->
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- FOOTER: HUD Stats Bar (RSI, Bollinger Bands, Volume spike alarms) -->
+        <footer class="hud-footer">
+            <div class="footer-stat-box" id="eth-indicators-panel">
+                <span class="stat-badge">ETH HUD</span>
+                <span class="stat-item">RSI: <strong id="eth-rsi">--</strong></span>
+                <span class="stat-item">BB_PctB: <strong id="eth-bb">--</strong></span>
+                <span class="stat-item">VOL RATIO: <strong id="eth-vol">--</strong></span>
+                <span class="stat-item text-green" id="eth-achievement"></span>
+            </div>
+        </footer>
+
+        <!-- Gamified Achievement/Alert System Popup Overlay -->
+        <div class="game-achievement-overlay" id="achievementOverlay">
+            <div class="achievement-icon">🏆</div>
+            <div class="achievement-text-group">
+                <div class="achievement-alert-title" id="ach-title">ACHIEVEMENT UNLOCKED</div>
+                <div class="achievement-alert-name" id="achievementName">HOT STREAK!</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cyberpunk Floating Settings Modal Overlay -->
+    <div class="settings-modal" id="settingsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>⚙️ SYSTEM SETTINGS</h3>
+                <button class="close-modal-btn" id="closeSettingsBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="model-config-panel">
+                    <h4 id="config-title">🤖 DYNAMIC MOE MODEL PATHS</h4>
+                    <p class="config-help-text">Load custom PyTorch weights files (.pth) directly from your computer's local memory. The system automatically reads weights to determine model dimensions.</p>
+                    <div class="config-inputs">
+                        <div class="config-row">
+                            <label for="model-path-15m">15m Path (.pth):</label>
+                            <input type="text" id="model-path-15m" placeholder="e.g. C:\models\model_15m.pth" />
+                            <button id="load-model-15m-btn" class="config-btn">Load 15m</button>
+                        </div>
+                    </div>
+                    <div class="config-status" id="config-status-msg">Enter absolute file path and click load.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/particles.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

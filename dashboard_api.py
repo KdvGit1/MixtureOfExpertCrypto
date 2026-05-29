@@ -733,7 +733,7 @@ async def api_get_backtest_rankings():
     for model in models:
         coin = model['coin']
         tf = model['timeframe']
-        cache_file = BACKTEST_CACHE_DIR / f"{coin}_{tf}_{datetime.now().strftime('%Y%m%d')}.json"
+        cache_file = BACKTEST_CACHE_DIR / f"{coin}_{tf}_{datetime.now().strftime('%Y-%m-%d')}.json"
         
         if cache_file.exists():
             try:
