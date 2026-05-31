@@ -162,7 +162,7 @@ def optimize_hyperparameters(coin, tf_name, train_ds, val_ds, n_trials=25):
         optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=5, factor=0.7)
         is_cuda = (DEVICE.type == 'cuda')
-        scaler = torch.amp.GradScaler(device_type="cuda", enabled=is_cuda)
+        scaler = torch.cuda.amp.GradScaler(enabled=is_cuda)
 
         best_val = float("inf")
 
@@ -255,7 +255,7 @@ def train_best_model(coin, tf_name, train_ds, val_ds, best_params, pretrain_epoc
     )
     pretrain_optimizer = optim.AdamW(pretrain_params, lr=best_params["learning_rate"])
     is_cuda = (DEVICE.type == 'cuda')
-    scaler = torch.amp.GradScaler(device_type="cuda", enabled=is_cuda)
+    scaler = torch.cuda.amp.GradScaler(enabled=is_cuda)
 
     # STAGE 1 LOOP
     for epoch in range(pretrain_epochs):

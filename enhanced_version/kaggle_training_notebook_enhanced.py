@@ -616,7 +616,7 @@ def train_single_model(coin, tf_config, tf_name):
     )
     pretrain_optimizer = optim.AdamW(pretrain_params, lr=best_params["learning_rate"])
     is_cuda = (DEVICE.type == 'cuda')
-    scaler = torch.amp.GradScaler(device_type="cuda", enabled=is_cuda)
+    scaler = torch.cuda.amp.GradScaler(enabled=is_cuda)
     
     for epoch in range(PRETRAIN_EPOCHS):
         model.train()
