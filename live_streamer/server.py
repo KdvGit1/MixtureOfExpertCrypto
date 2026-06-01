@@ -10,9 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-# Setup sys path so we can import from project root
+# Setup sys path so we can import from project root and enhanced version
 PROJECT_ROOT = Path(__file__).parent.parent
+ENHANCED_ROOT = PROJECT_ROOT / "enhanced_version"
 sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(ENHANCED_ROOT))
 
 from live_streamer.price_engine import PriceEngine
 from live_streamer.analysis_runner import AnalysisRunner

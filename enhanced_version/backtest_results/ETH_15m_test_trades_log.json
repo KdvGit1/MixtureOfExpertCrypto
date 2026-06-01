@@ -1,0 +1,172 @@
+[
+    {
+        "type": "SL",
+        "entry_date": "2025-02-25 06:45:00",
+        "exit_date": "2025-02-25 07:00:00",
+        "entry_price": 2504.37,
+        "exit_price": 2429.2389,
+        "pnl_pct": -15.492500000000014,
+        "balance": 8450.749999999998,
+        "side": "LONG"
+    },
+    {
+        "type": "SL",
+        "entry_date": "2025-03-04 01:15:00",
+        "exit_date": "2025-03-04 01:30:00",
+        "entry_price": 2129.16,
+        "exit_price": 2065.2852,
+        "pnl_pct": -15.492500000000014,
+        "balance": 7141.517556249997,
+        "side": "LONG"
+    },
+    {
+        "type": "EXIT",
+        "entry_date": "2025-03-10 05:30:00",
+        "exit_date": "2025-03-10 05:45:00",
+        "entry_price": 2023.93,
+        "exit_price": 2064.18,
+        "pnl_pct": 9.438553951964685,
+        "balance": 7815.573543785684,
+        "side": "LONG"
+    },
+    {
+        "type": "SL",
+        "entry_date": "2025-03-11 00:30:00",
+        "exit_date": "2025-03-11 00:45:00",
+        "entry_price": 1852.84,
+        "exit_price": 1797.2548,
+        "pnl_pct": -15.492499999999998,
+        "balance": 6604.745812514687,
+        "side": "LONG"
+    },
+    {
+        "type": "EXIT",
+        "entry_date": "2025-04-03 10:30:00",
+        "exit_date": "2025-04-03 10:45:00",
+        "entry_price": 1798.05,
+        "exit_price": 1793.42,
+        "pnl_pct": -1.7868621562247662,
+        "balance": 6486.728109076022,
+        "side": "LONG"
+    },
+    {
+        "type": "SL",
+        "entry_date": "2025-04-06 20:15:00",
+        "exit_date": "2025-04-06 20:30:00",
+        "entry_price": 1619.23,
+        "exit_price": 1570.6531,
+        "pnl_pct": -15.492500000000009,
+        "balance": 5481.771756777418,
+        "side": "LONG"
+    },
+    {
+        "type": "EXIT",
+        "entry_date": "2025-04-10 06:00:00",
+        "exit_date": "2025-04-10 06:15:00",
+        "entry_price": 1656.98,
+        "exit_price": 1612.2,
+        "pnl_pct": 13.019291119989369,
+        "balance": 6195.459580325625,
+        "side": "SHORT"
+    },
+    {
+        "type": "EXIT",
+        "entry_date": "2025-04-11 03:15:00",
+        "exit_date": "2025-04-11 03:30:00",
+        "entry_price": 1502.22,
+        "exit_price": 1544.28,
+        "pnl_pct": 13.49228142349321,
+        "balance": 7031.36842238193,
+        "side": "LONG"
+    },
+    {
+        "type": "EXIT",
+        "entry_date": "2025-05-10 03:30:00",
+        "exit_date": "2025-05-10 03:45:00",
+        "entry_price": 2301.3,
+        "exit_price": 2339.89,
+        "pnl_pct": 7.8801992352148105,
+        "balance": 7585.454263027606,
+        "side": "LONG"
+    },
+    {
+        "type": "EXIT",
+        "entry_date": "2025-05-19 08:00:00",
+        "exit_date": "2025-05-19 08:15:00",
+        "entry_price": 2379.51,
+        "exit_price": 2406.1,
+        "pnl_pct": 5.084491134729354,
+        "balance": 7971.136012560195,
+        "side": "LONG"
+    },
+    {
+        "type": "EXIT",
+        "entry_date": "2025-06-06 08:45:00",
+        "exit_date": "2025-06-06 09:00:00",
+        "entry_price": 2411.29,
+        "exit_price": 2464.2,
+        "pnl_pct": 10.465820162651497,
+        "balance": 8805.380772555094,
+        "side": "LONG"
+    },
+    {
+        "type": "EXIT",
+        "entry_date": "2025-08-26 08:45:00",
+        "exit_date": "2025-08-26 09:00:00",
+        "entry_price": 4352.22,
+        "exit_price": 4424.53,
+        "pnl_pct": 7.8031010610676255,
+        "balance": 9492.473533049386,
+        "side": "LONG"
+    },
+    {
+        "type": "TP",
+        "entry_date": "2025-10-10 21:15:00",
+        "exit_date": "2025-10-10 21:30:00",
+        "entry_price": 3590.0,
+        "exit_price": 3805.4,
+        "pnl_pct": 29.48500000000001,
+        "balance": 12291.329354268997,
+        "side": "LONG"
+    },
+    {
+        "type": "TP",
+        "entry_date": "2025-10-10 21:30:00",
+        "exit_date": "2025-10-10 21:45:00",
+        "entry_price": 3813.49,
+        "exit_price": 4042.2994,
+        "pnl_pct": 29.485000000000017,
+        "balance": 15915.427814375214,
+        "side": "LONG"
+    },
+    {
+        "type": "SL",
+        "entry_date": "2025-10-11 01:15:00",
+        "exit_date": "2025-10-11 01:30:00",
+        "entry_price": 3867.75,
+        "exit_price": 3751.7174999999997,
+        "pnl_pct": -15.492500000000033,
+        "balance": 13449.73016023313,
+        "side": "LONG"
+    },
+    {
+        "type": "TP",
+        "entry_date": "2026-02-03 20:00:00",
+        "exit_date": "2026-02-03 20:15:00",
+        "entry_price": 2127.03,
+        "exit_price": 2254.6518000000005,
+        "pnl_pct": 29.485000000000078,
+        "balance": 17415.38309797788,
+        "side": "LONG"
+    },
+    {
+        "type": "SL",
+        "entry_date": "2026-02-05 20:00:00",
+        "exit_date": "2026-02-05 20:15:00",
+        "entry_price": 1964.83,
+        "exit_price": 1905.8851,
+        "pnl_pct": -15.492499999999993,
+        "balance": 14717.304871523656,
+        "side": "LONG"
+    }
+]

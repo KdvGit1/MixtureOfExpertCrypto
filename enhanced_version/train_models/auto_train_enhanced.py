@@ -443,12 +443,13 @@ def train_best_model(coin, tf_name, train_ds, val_ds, best_params, pretrain_epoc
 # =========================================================
 # MAİN ÇALIŞTIRICI
 # =========================================================
-def run_training_pipeline(coins, timeframes, months_back, trials, pretrain, epochs):
+def run_training_pipeline(coins, timeframes, months_back, trials, pretrain, epochs, skip_optuna=True):
     """Tekli veya Çoklu Coin/Timeframe eğitimlerini koordine eder."""
     print("\n" + "="*60)
     print("🚀 ENHANCED MULTI-COIN MOE TRAINING PIPELINE")
     print(f"   Coins: {coins}")
     print(f"   Timeframes: {timeframes}")
+    print(f"   Skip Optuna: {skip_optuna}")
     print("="*60)
 
     for coin in coins:
@@ -502,12 +503,34 @@ def run_training_pipeline(coins, timeframes, months_back, trials, pretrain, epoc
             print(f"📊 Veri Sınırları: Train: {len(train_ds)}, Val: {len(val_ds)}")
 
             # 2. Optuna Hiperparametre Arama
-            best_params = optimize_hyperparameters(coin, tf, train_ds, val_ds, n_trials=trials)
+            best_params = None
+            params_file = OUTPUT_DIR / f"{coin}_{tf}_best_params.json"
             
-            # Parametreleri kaydet
-            OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
-            with open(OUTPUT_DIR / f"{coin}_{tf}_best_params.json", "w") as f:
-                json.dump(best_params, f, indent=4)
+            if skip_optuna:
+                if params_file.exists():
+                    try:
+                        with open(params_file, "r") as f:
+                            best_params = json.load(f)
+                        print(f"📂 Yerel best_params.json bulundu ve yüklendi: {params_file}")
+                    except Exception as e:
+                        print(f"⚠️ Yerel best_params.json yüklenirken hata oluştu: {e}")
+                
+                if best_params is None:
+                    # Kullanıcının paylaştığı en iyi deneme (Trial 14) parametreleri varsayılan fallback
+                    print("💡 En iyi Optuna Trial 14 parametreleri varsayılan olarak kullanılıyor.")
+                    best_params = {
+                        "embed_dim": 128,
+                        "learning_rate": 0.00036794317287287376,
+                        "batch_size": 1024,
+                        "dropout": 0.30210767758838586
+                    }
+            else:
+                best_params = optimize_hyperparameters(coin, tf, train_ds, val_ds, n_trials=trials)
+                
+                # Parametreleri kaydet
+                OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
+                with open(params_file, "w") as f:
+                    json.dump(best_params, f, indent=4)
 
             # 3. Final 2-Aşamalı Eğitim
             train_best_model(
@@ -526,12 +549,14 @@ def run_training_pipeline(coins, timeframes, months_back, trials, pretrain, epoc
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Enhanced multi-coin / multi-timeframe MoE training script.")
-    parser.add_argument("--coins", nargs="+", default=["BTC"], help="Coins to train (e.g. BTC LTC ADA)")
-    parser.add_argument("--timeframes", nargs="+", default=["1h"], help="Timeframes to train (e.g. 15m 1h)")
+    parser.add_argument("--coins", nargs="+", default=["ETH"], help="Coins to train (e.g. BTC LTC ADA)")
+    parser.add_argument("--timeframes", nargs="+", default=["15m"], help="Timeframes to train (e.g. 15m 1h)")
     parser.add_argument("--months", type=int, default=180, help="Months of data back to fetch (e.g. 60 or 180)")
     parser.add_argument("--trials", type=int, default=25, help="Number of Optuna trials")
     parser.add_argument("--pretrain", type=int, default=15, help="Stage-1 pretraining epochs")
     parser.add_argument("--epochs", type=int, default=100, help="Stage-2 supervised epochs")
+    parser.add_argument("--skip-optuna", action="store_true", default=True, help="Skip Optuna and use preset/loaded parameters (default)")
+    parser.add_argument("--run-optuna", action="store_false", dest="skip_optuna", help="Force running Optuna optimization")
 
     args = parser.parse_args()
     
@@ -541,5 +566,6 @@ if __name__ == "__main__":
         months_back=args.months,
         trials=args.trials,
         pretrain=args.pretrain,
-        epochs=args.epochs
+        epochs=args.epochs,
+        skip_optuna=args.skip_optuna
     )

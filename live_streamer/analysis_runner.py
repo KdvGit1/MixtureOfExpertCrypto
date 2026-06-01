@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
-# Import from existing project files
+# Import from existing project files (Enhanced MoE version)
+from train_models.ai_engine_enhanced import MultiBranchModel, CNN_FEATURES, LSTM_FEATURES, TR_FEATURES
 from train_models.data_fetcher import get_crypto_history, prepare_dual_dataframes
-from train_models.ai_engine_improved import MultiBranchModel, CNN_FEATURES, LSTM_FEATURES, TR_FEATURES
 
 logger = logging.getLogger("analysis_runner")
 
@@ -26,7 +26,11 @@ class AnalysisRunner:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.is_retraining = False
         
-        # Streak counters for fun achievements
+        # Static normalization stats loaded from JSON
+        self.stats_mean = None
+        self.stats_std = None
+        
+        # Streak counters for autonomous retraining trigger
         self.streaks = {"ETH/USDT": {"wins": 0, "losses": 0}}
         self.last_price = {"ETH/USDT": None}
         self.last_signal = {"ETH/USDT": None}
@@ -35,14 +39,28 @@ class AnalysisRunner:
         self.callbacks.append(callback)
 
     async def initialize(self):
-        """Load MoE models."""
-        logger.info("🧠 Initializing AI Models for 15m and 1h timeframes...")
+        """Load MoE models and static normalization stats."""
+        logger.info("🧠 Initializing AI Models for 15m timeframe...")
         
-        # 1. Paths to models (aligned with app.py)
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
-        autotrained_path = os.path.join(project_root, 'train_models', 'finalized_models', '3BranchApproach', '6try', 'AUTOTRAINED_LIVE_15M.pth')
-        default_path = os.path.join(project_root, 'train_models', 'finalized_models', '3BranchApproach', '6try', 'BEST_MODEL_FINAL.pth')
+        # Load static stats JSON for precise normalization
+        stats_path = os.path.join(project_root, 'enhanced_version', 'trained_models', 'ETH_15m_stats.json')
+        if os.path.exists(stats_path):
+            try:
+                with open(stats_path, "r") as f:
+                    stats_dict = json.load(f)
+                self.stats_mean = pd.Series(stats_dict["mean"])
+                self.stats_std = pd.Series(stats_dict["std"])
+                logger.info(f"📊 Static normalization stats loaded successfully from {stats_path}")
+            except Exception as e:
+                logger.error(f"❌ Failed to load static stats: {e}")
+        else:
+            logger.warning(f"⚠️ Static stats file not found at {stats_path}. Local rolling stats will be used as fallback.")
+
+        # Paths to models
+        autotrained_path = os.path.join(project_root, 'enhanced_version', 'trained_models', 'ETH_15m_autotrained_live.pth')
+        default_path = os.path.join(project_root, 'enhanced_version', 'trained_models', 'ETH_15m_model.pth')
         
         if os.path.exists(autotrained_path):
             logger.info("🧠 [BOOT] Found autotrained live fine-tuned weights. Prioritizing self-improved model...")
@@ -54,31 +72,30 @@ class AnalysisRunner:
             '15m': active_15m
         }
         
-        # Model hyperparams
+        # Read hyperparameters from parameters JSON dynamically
         model_params = {
-            '15m': {'embed_dim': 96, 'dropout': 0.31}
+            '15m': {'embed_dim': 128, 'dropout': 0.30}  # Defaults
         }
         
-        # Try loading exact hyperparameters from CryptoMoeApp JSON
-        for tf in ['15m']:
-            params_file = os.path.join(project_root, 'train_models', 'CryptoMoeApp', f'best_params_{tf}.json')
-            if os.path.exists(params_file):
-                try:
-                    with open(params_file) as f:
-                        params = json.load(f)
-                        model_params[tf] = {
-                            'embed_dim': params.get('embed_dim', 128),
-                            'dropout': params.get('dropout', 0.15)
-                        }
-                except Exception:
-                    pass
+        params_path = os.path.join(project_root, 'enhanced_version', 'trained_models', 'ETH_15m_params.json')
+        if os.path.exists(params_path):
+            try:
+                with open(params_path, "r") as f:
+                    params = json.load(f)
+                model_params['15m'] = {
+                    'embed_dim': params.get('embed_dim', 128),
+                    'dropout': params.get('dropout', 0.30)
+                }
+                logger.info(f"⚙️ Loaded model hyperparams from JSON: {model_params['15m']}")
+            except Exception as e:
+                logger.error(f"❌ Failed to parse parameters JSON: {e}")
 
-        # 2. Load PyTorch MoE models
+        # Load PyTorch MoE models
         for tf, path in model_paths.items():
             if os.path.exists(path):
                 try:
                     p = model_params[tf]
-                    logger.info(f"   🤖 Loading {tf} MoE Model (dim={p['embed_dim']}, drop={p['dropout']})...")
+                    logger.info(f"   🤖 Loading {tf} MoE Model (dim={p['embed_dim']}, drop={p['dropout']:.4f})...")
                     model = MultiBranchModel(embed_dim=p['embed_dim'], dropout=p['dropout']).to(self.device)
                     state_dict = torch.load(path, map_location=self.device, weights_only=True)
                     clean_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
@@ -105,18 +122,15 @@ class AnalysisRunner:
             clean_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
             
             # 2. Auto-detect embed_dim from weights
-            # The conv layer weight has shape [embed_dim, in_channels, kernel_size]
             first_layer_key = 'cnn_branch.0.weight'
             if first_layer_key in clean_state:
                 embed_dim = clean_state[first_layer_key].shape[0]
                 logger.info(f"🔍 Auto-detected embed_dim={embed_dim} from state dict.")
             else:
-                # Fallback to standard dimension
-                embed_dim = 96 if timeframe == '15m' else 128
+                embed_dim = 128
                 logger.warning(f"⚠️ Could not find cnn_branch.0.weight in state dict. Using fallback embed_dim={embed_dim}")
             
-            # Default dropout is fine since inference turns off dropout anyway
-            dropout = 0.15
+            dropout = 0.30
             
             # 3. Re-initialize model architecture
             model = MultiBranchModel(embed_dim=embed_dim, dropout=dropout).to(self.device)
@@ -175,13 +189,16 @@ class AnalysisRunner:
         lstm_cols = [df_ai.columns.get_loc(c) for c in LSTM_FEATURES if c in df_ai.columns]
         tr_cols = [df_ai.columns.get_loc(c) for c in TR_FEATURES if c in df_ai.columns]
         
-        # Mean/std normalization (must mimic data_fetcher scaling)
-        mean = df_ai.mean()
-        std = df_ai.std()
-        if 'Log_Ret' in mean:
-            mean['Log_Ret'] = 0.0
-        std[std == 0] = 1.0
-        df_normalized = (df_ai - mean) / std
+        # Mean/std normalization using training statistics
+        if self.stats_mean is not None and self.stats_std is not None:
+            df_normalized = (df_ai - self.stats_mean) / self.stats_std
+        else:
+            mean = df_ai.mean()
+            std = df_ai.std()
+            if 'Log_Ret' in mean:
+                mean['Log_Ret'] = 0.0
+            std[std == 0] = 1.0
+            df_normalized = (df_ai - mean) / std
         
         data = df_normalized.values
         max_window = max(cnn_window, lstm_window, tr_window)
@@ -202,7 +219,7 @@ class AnalysisRunner:
         return x_cnn, x_lstm, x_tr
 
     def calculate_risk(self, rsi, bb_pctb, vol_ratio):
-        """Calculate risk scores based on extreme zone analysis (from subagent reports)."""
+        """Calculate risk scores based on extreme zone analysis."""
         reasons = []
         rsi_val = rsi / 100.0 if rsi > 1 else rsi
         
@@ -227,7 +244,7 @@ class AnalysisRunner:
         }
 
     async def _analyze_symbol(self, symbol):
-        """Retrieve 500 candles, process indicators, run models, and evaluate risk/meta gates."""
+        """Retrieve historical candles, process indicators, run models, and evaluate risk/gating weights."""
         try:
             self.latest_analysis[symbol] = {}
             
@@ -264,23 +281,34 @@ class AnalysisRunner:
                 pred_cnn = 0.0
                 pred_lstm = 0.0
                 pred_tr = 0.0
+                g_cnn_val = 0.33
+                g_lstm_val = 0.33
+                g_tr_val = 0.34
                 has_ai = False
                 
                 if model is not None:
                     x_cnn, x_lstm, x_tr = self.prepare_model_input(df_ai)
                     if x_cnn is not None and not np.isnan(df_ai.values).any() and not np.isinf(df_ai.values).any():
                         with torch.no_grad():
-                            main_out, cnn_out, lstm_out, tr_out = model(x_cnn, x_lstm, x_tr)
+                            # Unpack all 5 outputs from the dynamic MoE router
+                            main_out, cnn_out, lstm_out, tr_out, g_weights = model(x_cnn, x_lstm, x_tr)
                         
-                        # Reverse log scaling (* 100 in training)
+                        # Predictions are already divided by 100 in backtest to keep in standard z-score space
                         pred_main = main_out.item() / 100.0
                         pred_cnn = cnn_out.item() / 100.0
                         pred_lstm = lstm_out.item() / 100.0
                         pred_tr = tr_out.item() / 100.0
+                        
+                        # Expert gate weights
+                        g_weights_np = g_weights.squeeze().cpu().numpy()
+                        g_cnn_val = float(g_weights_np[0])
+                        g_lstm_val = float(g_weights_np[1])
+                        g_tr_val = float(g_weights_np[2])
                         has_ai = True
                 
                 # 4. Generate Signal
-                threshold = 0.003  # 0.30% prediction threshold
+                # 0.80 standard deviations noise-reduction threshold
+                threshold = 0.80  
                 signal = "HOLD"
                 signal_text = "Idle"
                 
@@ -347,7 +375,10 @@ class AnalysisRunner:
                         "main": pred_main,
                         "cnn": pred_cnn,
                         "lstm": pred_lstm,
-                        "tr": pred_tr
+                        "tr": pred_tr,
+                        "g_cnn": g_cnn_val,
+                        "g_lstm": g_lstm_val,
+                        "g_tr": g_tr_val
                     },
                     "indicators": {
                         "rsi": rsi,
@@ -371,7 +402,7 @@ class AnalysisRunner:
             traceback.print_exc()
 
     async def _broadcast_system_alert(self, action, message):
-        """Helper to broadcast custom otonom retraining alerts to the WebSocket pool."""
+        """Helper to broadcast retraining status events via WebSocket."""
         payload = {
             "type": "retrain_status",
             "timestamp": datetime.now().isoformat(),
@@ -383,15 +414,15 @@ class AnalysisRunner:
         for cb in self.callbacks:
             try:
                 if asyncio.iscoroutinefunction(cb):
-                    await cb(payload)
+                     await cb(payload)
                 else:
-                    cb(payload)
+                     cb(payload)
             except Exception as e:
                 logger.error(f"Callback error: {e}")
 
     async def run_autonomous_retrain(self):
-        """Asynchronously fetches the last 500 candles, runs a micro-fine-tuning PyTorch loop,
-        saves the optimized weights, and hot-swaps them instantly with live WebSocket logs."""
+        """Asynchronously runs a micro-fine-tuning PyTorch loop on recent candles,
+        saves the optimized weights, and hot-swaps them instantly."""
         if self.is_retraining:
             return
             
@@ -437,12 +468,17 @@ class AnalysisRunner:
             if len(df_ai) < max_window + 10:
                 raise ValueError(f"Insufficient training samples: {len(df_ai)}")
                 
-            mean = df_ai.mean()
-            std = df_ai.std()
-            if 'Log_Ret' in mean:
-                mean['Log_Ret'] = 0.0
-            std[std == 0] = 1.0
-            df_normalized = (df_ai - mean) / std
+            if self.stats_mean is not None and self.stats_std is not None:
+                df_normalized = (df_ai - self.stats_mean) / self.stats_std
+                ret_std = self.stats_std["Log_Ret"]
+            else:
+                mean = df_ai.mean()
+                std = df_ai.std()
+                if 'Log_Ret' in mean:
+                    mean['Log_Ret'] = 0.0
+                std[std == 0] = 1.0
+                df_normalized = (df_ai - mean) / std
+                ret_std = std["Log_Ret"]
             
             x_cnn_list, x_lstm_list, x_tr_list, y_list = [], [], [], []
             cnn_cols = [df_ai.columns.get_loc(c) for c in CNN_FEATURES if c in df_ai.columns]
@@ -457,7 +493,8 @@ class AnalysisRunner:
                 x_lstm = data_vals[i - lstm_window:i, lstm_cols]
                 x_tr = data_vals[i - tr_window:i, tr_cols]
                 
-                ret = np.log(raw_close[i + 1] / raw_close[i]) * 100.0
+                # Align perfectly with the training target scale (dividing by log return standard deviation)
+                ret = (np.log(raw_close[i + 1] / raw_close[i]) / ret_std) * 100.0
                 
                 x_cnn_list.append(x_cnn)
                 x_lstm_list.append(x_lstm)
@@ -482,16 +519,17 @@ class AnalysisRunner:
             epochs = 5
             for epoch in range(epochs):
                 optimizer.zero_grad()
-                main_out, cnn_out, lstm_out, tr_out = model(x_cnn_t, x_lstm_t, x_tr_t)
+                # Unpack the 5 outputs of the model
+                main_out, _, _, _, _ = model(x_cnn_t, x_lstm_t, x_tr_t)
                 loss = criterion(main_out.view(-1), y_t.view(-1))
                 loss.backward()
                 optimizer.step()
                 
             # 6. Save optimized state weights
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            save_dir = os.path.join(project_root, 'train_models', 'finalized_models', '3BranchApproach', '6try')
+            save_dir = os.path.join(project_root, 'enhanced_version', 'trained_models')
             os.makedirs(save_dir, exist_ok=True)
-            save_path = os.path.join(save_dir, 'AUTOTRAINED_LIVE_15M.pth')
+            save_path = os.path.join(save_dir, 'ETH_15m_autotrained_live.pth')
             torch.save(model.state_dict(), save_path)
             
             # 7. Hot-swap active inference weights

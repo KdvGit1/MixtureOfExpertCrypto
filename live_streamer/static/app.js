@@ -490,21 +490,27 @@ function renderAnalysisFrame() {
         document.getElementById("eth-sl-val").innerText = `$${sl.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     }
 
-    // 4. Gating weight analysis (Dominant Path selection)
+    // 4. Gating weight analysis (Dominant Expert Path selection from MoE Router)
     const pathEl = document.getElementById("eth-dominant-path");
     if (pathEl) {
         const brain = tfInfo.brain;
-        const cnnAbs = Math.abs(brain.cnn);
-        const lstmAbs = Math.abs(brain.lstm);
-        const trAbs = Math.abs(brain.tr);
+        const g_cnn = brain.g_cnn !== undefined ? brain.g_cnn : 0.33;
+        const g_lstm = brain.g_lstm !== undefined ? brain.g_lstm : 0.33;
+        const g_tr = brain.g_tr !== undefined ? brain.g_tr : 0.34;
         
         let dominant = "CNN Scalper";
-        if (lstmAbs > cnnAbs && lstmAbs > trAbs) {
+        let dominantWeight = g_cnn;
+        if (g_lstm > dominantWeight) {
             dominant = "LSTM Swinger";
-        } else if (trAbs > cnnAbs && trAbs > lstmAbs) {
-            dominant = "Transformer Macro";
+            dominantWeight = g_lstm;
         }
-        pathEl.innerText = dominant;
+        if (g_tr > dominantWeight) {
+            dominant = "Transformer Macro";
+            dominantWeight = g_tr;
+        }
+        
+        // Display dominant expert and routing percentage
+        pathEl.innerText = `${dominant} (${(dominantWeight * 100).toFixed(0)}%)`;
     }
 
     // 5. Tray bottom indicators updates
@@ -667,8 +673,8 @@ function simulateAIBotTrades() {
         const cnnVal = cnnData.brain.cnn;
         const curPrice = state.ethPrice;
         let cnnSig = "FLAT";
-        if (cnnVal > 0.0008) cnnSig = "LONG";
-        else if (cnnVal < -0.0008) cnnSig = "SHORT";
+        if (cnnVal > 0.50) cnnSig = "LONG";
+        else if (cnnVal < -0.50) cnnSig = "SHORT";
         
         evaluateBotPosition("cnn", cnnSig, curPrice, "ETH/USDT");
     }
@@ -679,8 +685,8 @@ function simulateAIBotTrades() {
         const lstmVal = lstmData.brain.lstm;
         const curPrice = state.ethPrice;
         let lstmSig = "FLAT";
-        if (lstmVal > 0.0015) lstmSig = "LONG";
-        else if (lstmVal < -0.0015) lstmSig = "SHORT";
+        if (lstmVal > 0.80) lstmSig = "LONG";
+        else if (lstmVal < -0.80) lstmSig = "SHORT";
         
         evaluateBotPosition("lstm", lstmSig, curPrice, "ETH/USDT");
     }
@@ -692,8 +698,8 @@ function simulateAIBotTrades() {
         const curPrice = state.ethPrice;
         let trSig = "FLAT";
         
-        if (trVal > 0.002) trSig = "LONG";
-        else if (trVal < -0.002) trSig = "SHORT";
+        if (trVal > 1.20) trSig = "LONG";
+        else if (trVal < -1.20) trSig = "SHORT";
         
         evaluateBotPosition("tr", trSig, curPrice, "ETH/USDT");
     }

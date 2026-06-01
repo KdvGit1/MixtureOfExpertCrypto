@@ -1,0 +1,8 @@
+{
+    "coin": "ETH",
+    "timeframe": "15m",
+    "embed_dim": 128,
+    "dropout": 0.30210767758838586,
+    "learning_rate": 0.00036794317287287376,
+    "batch_size": 1024
+}

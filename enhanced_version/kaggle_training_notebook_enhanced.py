@@ -271,7 +271,8 @@ class TimeSeriesContrastiveLoss(nn.Module):
         labels = torch.cat([labels + batch_size, labels], dim=0)
         
         mask = torch.eye(2 * batch_size, dtype=torch.bool, device=z1.device)
-        similarity_matrix.masked_fill_(mask, -1e9)
+        fill_value = -1e4 if similarity_matrix.dtype in [torch.float16, torch.bfloat16] else -1e9
+        similarity_matrix.masked_fill_(mask, fill_value)
         
         return F.cross_entropy(similarity_matrix, labels)
 
