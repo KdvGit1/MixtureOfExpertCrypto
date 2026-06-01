@@ -199,7 +199,7 @@ body {
 }
 
 .battle-card {
-    flex: 1;
+    flex: 1.8;
     height: 100%;
     max-height: 850px;
     background: var(--color-bg-card);
@@ -317,7 +317,7 @@ body {
 
 /* Charts */
 .chart-container {
-    height: 180px;
+    height: 350px;
     width: 100%;
     margin-top: 20px;
     position: relative;
@@ -1425,6 +1425,51 @@ body {
     margin-bottom: 15px;
     line-height: 1.4;
     text-align: left;
+}
+
+/* ==========================================================================
+   ⚡ DYNAMIC MOE PROJECTION BANNER
+   ========================================================================== */
+.moe-projection-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 15px;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 183, 0, 0.25);
+    box-shadow: 0 0 10px rgba(255, 183, 0, 0.05);
+    padding: 10px 14px;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+
+.moe-projection-banner:hover {
+    border-color: rgba(255, 183, 0, 0.5);
+    box-shadow: 0 0 15px rgba(255, 183, 0, 0.15);
+}
+
+.banner-pulse {
+    width: 8px;
+    height: 8px;
+    background: var(--neon-gold);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--neon-gold);
+    animation: corePulse 1s infinite alternate;
+    flex-shrink: 0;
+}
+
+.banner-text {
+    font-family: var(--font-body);
+    font-size: 0.78rem;
+    color: var(--color-text-secondary);
+    line-height: 1.35;
+    text-align: left;
+}
+
+.banner-text strong {
+    font-family: var(--font-header);
+    color: var(--neon-gold);
+    text-shadow: 0 0 5px var(--neon-gold-glow);
 }
 
 

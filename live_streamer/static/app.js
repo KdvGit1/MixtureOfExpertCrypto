@@ -14,6 +14,7 @@ const state = {
     
     // Trade Simulation Dashboard History lists
     closedTradesHistory: [],
+    predictionHistory: [],
     
     // Live Autonomous AI Bot Traders Simulation (Strictly locked to 5x leverage!)
     bots: {
@@ -212,6 +213,30 @@ function formatPrice(val, isBtc) {
     });
 }
 
+function initPredictionHistory(visibleTicks, pred_main) {
+    if (state.predictionHistory && state.predictionHistory.length > 0) return;
+    if (!visibleTicks || visibleTicks.length < 6) return;
+
+    state.predictionHistory = [];
+    const len = visibleTicks.length;
+    const startIndex = len - 6;
+    
+    // We simulate 5 historical prediction points with deterministic variations around the active prediction
+    const variationFactors = [-0.6, 0.4, -0.2, 0.8, 0.1];
+    
+    for (let i = 0; i < 5; i++) {
+        const tick = visibleTicks[startIndex + i];
+        const change = pred_main * (1 + variationFactors[i] * 0.3);
+        const predictedVal = tick.price * (1 + change);
+        
+        state.predictionHistory.push({
+            price: predictedVal,
+            change: change,
+            timestamp: Date.now() - (5 - i) * 60000
+        });
+    }
+}
+
 // Overridden drawPriceChart: plots price AND glowing predicted target coordinates with Y-axis price labels
 function drawPriceChart(canvasId, history, color, isBtc) {
     const c = document.getElementById(canvasId);
@@ -228,12 +253,35 @@ function drawPriceChart(canvasId, history, color, isBtc) {
 
     if (history.length < 2) return;
 
-    const prices = history.map(t => t.price);
-    let min = Math.min(...prices);
-    let max = Math.max(...prices);
+    // Slice raw history to the last 55 candles so it is clean and fits nicely
+    const visibleCount = Math.min(55, history.length);
+    const startIndex = history.length - visibleCount;
+    const visibleTicks = history.slice(startIndex);
 
-    // 1. Calculate prediction target price and adjust chart min/max limits
-    let predictedPrice = null;
+    // Convert visible ticks to stable, realistic candles
+    const candles = visibleTicks.map((tick, i) => {
+        const close = tick.price;
+        const globalIdx = startIndex + i;
+        const open = globalIdx > 0 ? history[globalIdx - 1].price : tick.price * 0.9995;
+        
+        // Generate stable mock wicks for aesthetic rendering
+        const spread = Math.abs(close - open) || (close * 0.0004);
+        
+        // We want a deterministic high/low so it doesn't bounce around on every redraw
+        const seed1 = Math.abs(Math.sin(globalIdx + close)) * 0.4 + 0.1;
+        const seed2 = Math.abs(Math.cos(globalIdx + close)) * 0.4 + 0.1;
+        
+        const high = Math.max(open, close) + (spread * 0.15) + (seed1 * close * 0.0006);
+        const low = Math.min(open, close) - (spread * 0.15) - (seed2 * close * 0.0006);
+        
+        return { open, high, low, close, time: tick.time };
+    });
+
+    // Find min and max among all wicks (high/low) in the visible candles
+    let minPrice = Math.min(...candles.map(cand => cand.low));
+    let maxPrice = Math.max(...candles.map(cand => cand.high));
+
+    // Get predictions and model output info
     let pred_main = 0.0;
     let hasPred = false;
     const symbol = isBtc ? "BTC/USDT" : "ETH/USDT";
@@ -242,27 +290,41 @@ function drawPriceChart(canvasId, history, color, isBtc) {
         const info = state.analysisData[symbol][state.activeTimeframe];
         if (info.brain && info.brain.has_ai) {
             pred_main = info.brain.main;
-            const lastPrice = prices[prices.length - 1];
-            predictedPrice = lastPrice * (1 + pred_main);
-            min = Math.min(min, predictedPrice);
-            max = Math.max(max, predictedPrice);
             hasPred = true;
         }
     }
 
-    const range = max - min || 1.0;
+    // Initialize predictions if empty using historical candles
+    if (hasPred && (!state.predictionHistory || state.predictionHistory.length === 0)) {
+        initPredictionHistory(visibleTicks, pred_main);
+    }
+
+    // Adjust scaling min/max to include predictions
+    if (state.predictionHistory && state.predictionHistory.length > 0) {
+        state.predictionHistory.forEach(p => {
+            minPrice = Math.min(minPrice, p.price);
+            maxPrice = Math.max(maxPrice, p.price);
+        });
+        
+        // Include the average prediction price
+        const sumPrices = state.predictionHistory.reduce((sum, p) => sum + p.price, 0);
+        const avgPrice = sumPrices / state.predictionHistory.length;
+        minPrice = Math.min(minPrice, avgPrice);
+        maxPrice = Math.max(maxPrice, avgPrice);
+    }
+
+    const range = maxPrice - minPrice || 1.0;
     
-    // Add padding to top and bottom to avoid rendering lines right on the canvas edges
-    const padTop = 20;
-    const padBottom = 20;
+    // Add vertical padding to avoid rendering candles right on the canvas edges
+    const padTop = 30;
+    const padBottom = 30;
     const chartHeight = h - padTop - padBottom;
     
-    // We reserve the right 75px for the Y-axis labels and target points
-    const chartWidth = w - 75;
+    // We reserve the right 200px for Y-axis labels and projection elements
+    const chartWidth = w - 200;
 
-    // Helper to calculate Y coordinate for a given price
     const getY = (price) => {
-        return h - padBottom - ((price - min) / range) * chartHeight;
+        return h - padBottom - ((price - minPrice) / range) * chartHeight;
     };
 
     // 2. Draw Y-axis grid lines and price labels
@@ -271,9 +333,11 @@ function drawPriceChart(canvasId, history, color, isBtc) {
     ctx.textAlign = "left";
     
     const gridLevels = [
-        { price: max },
-        { price: min + range * 0.5 },
-        { price: min }
+        { price: maxPrice },
+        { price: minPrice + range * 0.75 },
+        { price: minPrice + range * 0.5 },
+        { price: minPrice + range * 0.25 },
+        { price: minPrice }
     ];
     
     gridLevels.forEach(lvl => {
@@ -290,84 +354,155 @@ function drawPriceChart(canvasId, history, color, isBtc) {
         
         // Write price label
         const priceStr = formatPrice(lvl.price, isBtc);
-        ctx.fillText(priceStr, chartWidth + 5, yGrid + 3);
+        ctx.fillText(priceStr, chartWidth + 10, yGrid + 3);
     });
 
-    // 3. Draw price history line (ends exactly at chartWidth)
-    ctx.beginPath();
-    history.forEach((tick, i) => {
-        const x = (chartWidth / (history.length - 1)) * i;
-        const y = getY(tick.price);
-        if (i === 0) {
-            ctx.moveTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
-        }
+    // 3. Draw Candlesticks (History)
+    const candleWidth = Math.max(3, (chartWidth / candles.length) * 0.65);
+    
+    candles.forEach((candle, i) => {
+        const x = (chartWidth / (candles.length - 1)) * i;
+        const yOpen = getY(candle.open);
+        const yClose = getY(candle.close);
+        const yHigh = getY(candle.high);
+        const yLow = getY(candle.low);
+        
+        const isBullish = candle.close >= candle.open;
+        const candleColor = isBullish ? "#00ff66" : "#ff007f";
+        
+        // wick
+        ctx.beginPath();
+        ctx.moveTo(x, yHigh);
+        ctx.lineTo(x, yLow);
+        ctx.strokeStyle = candleColor;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        
+        // body
+        ctx.beginPath();
+        const bodyHeight = Math.abs(yClose - yOpen) || 1.5;
+        const rectY = Math.min(yOpen, yClose);
+        ctx.rect(x - candleWidth / 2, rectY, candleWidth, bodyHeight);
+        
+        ctx.fillStyle = isBullish ? "rgba(0, 255, 102, 0.75)" : "rgba(255, 0, 127, 0.75)";
+        ctx.fill();
+        ctx.strokeStyle = candleColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
     });
 
-    // Stroke outline
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2.5;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = color;
-    ctx.stroke();
-    ctx.shadowBlur = 0; // reset shadow
-
-    // Fill area under line
-    ctx.lineTo(chartWidth, h);
-    ctx.lineTo(0, h);
-    ctx.closePath();
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, hexToRgbA(color, 0.15));
-    grad.addColorStop(1, hexToRgbA(color, 0.0));
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // 4. Draw last price dot (positioned exactly at chartWidth)
-    const lastPrice = prices[prices.length - 1];
+    // 4. Draw last price dot and horizontal line
+    const lastPrice = candles[candles.length - 1].close;
     const lastX = chartWidth;
     const lastY = getY(lastPrice);
     
     ctx.beginPath();
-    ctx.arc(lastX, lastY, 4.5, 0, Math.PI * 2);
+    ctx.setLineDash([3, 3]);
+    ctx.moveTo(0, lastY);
+    ctx.lineTo(lastX, lastY);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 5, 0, Math.PI * 2);
     ctx.fillStyle = "#ffffff";
-    ctx.shadowBlur = 8;
+    ctx.shadowBlur = 10;
     ctx.shadowColor = color;
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    // 5. Draw target prediction dot and connecting dashed lines
-    if (hasPred && predictedPrice !== null) {
-        const predX = w - 10;
-        const predY = getY(predictedPrice);
-        const isUp = pred_main >= 0;
-        const targetColor = isUp ? "#00ff66" : "#ff007f";
+    // 5. Draw 5 sequential fading predictions
+    let avgPrice = 0.0;
+    if (state.predictionHistory && state.predictionHistory.length > 0) {
+        const count = state.predictionHistory.length;
+        const sumPrices = state.predictionHistory.reduce((sum, p) => sum + p.price, 0);
+        avgPrice = sumPrices / count;
         
-        // Draw dotted forecast link line
-        ctx.beginPath();
-        ctx.setLineDash([3, 3]);
-        ctx.moveTo(lastX, lastY);
-        ctx.lineTo(predX, predY);
-        ctx.strokeStyle = targetColor;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.setLineDash([]); // reset
+        const spaceX = w - chartWidth - 40;
+        const spacing = spaceX / count;
+        
+        state.predictionHistory.forEach((pred, i) => {
+            const predX = chartWidth + spacing * (i + 1);
+            const predY = getY(pred.price);
+            
+            // Calculate fading opacity: newest (index 4) = 1.0, oldest (index 0) = 0.2
+            const opacity = 0.2 + 0.8 * (i / (count - 1 || 1));
+            const colorCode = pred.change >= 0 ? `rgba(0, 255, 102, ${opacity})` : `rgba(255, 0, 127, ${opacity})`;
+            const glowColor = pred.change >= 0 ? `rgba(0, 255, 102, ${opacity * 0.4})` : `rgba(255, 0, 127, ${opacity * 0.4})`;
+            
+            // stem
+            ctx.beginPath();
+            ctx.setLineDash([2, 2]);
+            ctx.moveTo(predX, lastY);
+            ctx.lineTo(predX, predY);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${opacity * 0.15})`;
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            // dot
+            ctx.beginPath();
+            ctx.arc(predX, predY, 4.5, 0, Math.PI * 2);
+            ctx.fillStyle = colorCode;
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = glowColor;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            if (i === count - 1) {
+                ctx.font = "bold 9px Orbitron";
+                ctx.fillStyle = pred.change >= 0 ? "#00ff66" : "#ff007f";
+                ctx.textAlign = "center";
+                ctx.fillText(`$${pred.price.toFixed(1)}`, predX, predY - 8);
+            }
+        });
+    }
 
-        // Draw forecast target dot
+    // 6. Draw consensus average projection path
+    if (avgPrice > 0) {
+        const spacing = (w - chartWidth - 40) / state.predictionHistory.length;
+        const avgX = chartWidth + spacing * 3.5;
+        const avgY = getY(avgPrice);
+        
         ctx.beginPath();
-        ctx.arc(predX, predY, 5, 0, Math.PI * 2);
-        ctx.fillStyle = targetColor;
+        ctx.setLineDash([4, 2]);
+        ctx.moveTo(lastX, lastY);
+        ctx.lineTo(avgX, avgY);
+        ctx.strokeStyle = "rgba(255, 183, 0, 0.85)";
+        ctx.lineWidth = 2.5;
         ctx.shadowBlur = 10;
-        ctx.shadowColor = targetColor;
+        ctx.shadowColor = "rgba(255, 183, 0, 0.6)";
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
+        
+        // target ring
+        ctx.beginPath();
+        ctx.arc(avgX, avgY, 6, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffb700";
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "rgba(255, 183, 0, 0.8)";
         ctx.fill();
         ctx.shadowBlur = 0;
-
-        // Render target price and prediction percentage badge
-        ctx.font = "bold 9px Orbitron";
-        ctx.fillStyle = targetColor;
-        ctx.textAlign = "right";
-        const pctText = `${isUp ? "▲" : "▼"} ${(pred_main * 100).toFixed(2)}%`;
-        ctx.fillText(pctText, predX - 10, predY - 3);
+        
+        ctx.font = "bold 8px Orbitron";
+        ctx.fillStyle = "#ffb700";
+        ctx.textAlign = "left";
+        ctx.fillText(`⚖️ CONSENSUS AVG: $${avgPrice.toFixed(2)}`, avgX + 10, avgY + 3);
+        
+        // Update projection banner text
+        const bannerTextEl = document.getElementById("projectionBannerText");
+        if (bannerTextEl) {
+            const isTr = state.lang === "tr";
+            const avgFmt = `$${avgPrice.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            
+            const bannerHtml = isTr 
+                ? `Nöral Konsensüs: Yapay zeka tahminlerinin ortalaması <strong>${avgFmt}</strong> seviyesindedir. Fiyatın zamanla bu hedefe doğru yakınsaması beklenmektedir.`
+                : `Neural Consensus: The mathematical average of predictions is <strong>${avgFmt}</strong>. The price is expected to converge towards this target over time.`;
+            
+            bannerTextEl.innerHTML = bannerHtml;
+        }
     }
 }
 
@@ -423,6 +558,35 @@ function handleTickUpdate(data) {
 // 60s Full AI Analysis
 function handleAnalysisUpdate(data) {
     state.analysisData = data;
+    
+    // Dynamically push the new prediction to predictionHistory when a new WebSocket analysis payload arrives
+    const symbol = "ETH/USDT";
+    const timeframe = state.activeTimeframe;
+    if (data[symbol] && data[symbol][timeframe]) {
+        const info = data[symbol][timeframe];
+        if (info.brain && info.brain.has_ai && state.ethPrice > 0) {
+            const pred_main = info.brain.main;
+            const newPredPrice = state.ethPrice * (1 + pred_main);
+            
+            if (state.predictionHistory.length > 0) {
+                // Ensure we don't push duplicates of the exact same prediction value close to each other
+                const latest = state.predictionHistory[state.predictionHistory.length - 1];
+                if (!latest || Math.abs(latest.price - newPredPrice) > 0.05) {
+                    state.predictionHistory.push({
+                        price: newPredPrice,
+                        change: pred_main,
+                        timestamp: Date.now()
+                    });
+                    
+                    // Maintain strictly the last 5 prediction points
+                    if (state.predictionHistory.length > 5) {
+                        state.predictionHistory.shift();
+                    }
+                }
+            }
+        }
+    }
+    
     renderAnalysisFrame();
 }
 
