@@ -1,0 +1,14 @@
+strategy_id: equity_long_v1
+mode: long_only
+entry_probability: 0.58
+minimum_edge_after_cost: 0.001
+exit_probability: 0.48
+maximum_positions: 10
+maximum_instrument_weight: 0.15
+costs:
+  commission_bps: 5.0
+  spread_bps: 8.0
+  slippage_bps: 5.0
+risk:
+  maximum_drawdown_pct: 20.0
+  maximum_daily_loss_pct: 5.0

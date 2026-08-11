@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}MarketMoE · {{ title }}{% endblock %}
+{% block content %}
+<p class="eyebrow">{{ page_name|upper }}</p><h1>{{ title }}</h1>
+{% if page_name == 'scanner' %}
+<form class="panel form-grid" id="scanner-form"><label>Evren<select id="scanner-universe"></select></label>
+<label>Timeframe<select id="scanner-timeframe"><option>1d</option><option>1h</option><option>15m</option></select></label>
+<button type="submit">Cache'i tara</button></form>
+{% elif page_name == 'instrument' %}
+<form class="panel form-grid" id="instrument-form"><label>Instrument ID<input id="instrument-id" placeholder="equity:XNAS:AAPL" required></label>
+<label>Timeframe<input id="instrument-timeframe" value="1d" required></label><button type="submit">Yerel veriyi göster</button></form>
+{% elif page_name == 'backtests' %}
+<form class="panel" id="backtest-form"><label>Canonical bars JSON<textarea id="backtest-bars" rows="7" placeholder='[{"open_time_utc":"...", ...}]' required></textarea></label>
+<label>Signals JSON<textarea id="backtest-signals" rows="2" placeholder="[0, 1, 1, 0]" required></textarea></label><button type="submit">Backtest çalıştır</button></form>
+{% elif page_name == 'portfolio' %}
+<form class="panel form-grid" id="trade-form"><label>Instrument ID<input name="instrument_id" placeholder="equity:XNAS:AAPL" required></label>
+<label>Para birimi<input name="currency" value="USD" required></label><label>Yön<select name="side"><option value="long">Long</option><option value="short">Short</option></select></label>
+<label>Miktar<input name="quantity" type="number" min="0" step="any" required></label><label>Giriş fiyatı<input name="entry_price" type="number" min="0" step="any" required></label>
+<label>Giriş zamanı (UTC)<input name="entry_time_utc" type="datetime-local" required></label><label>Not<input name="note"></label><button type="submit">Manuel trade aç</button></form>
+<form class="panel form-grid" id="close-form"><label>Trade ID<input name="trade_id" required></label><label>Çıkış fiyatı<input name="exit_price" type="number" min="0" step="any" required></label>
+<label>Çıkış zamanı (UTC)<input name="exit_time_utc" type="datetime-local" required></label><button type="submit">Trade kapat</button></form>
+{% endif %}
+<section class="panel results" data-page="{{ page_name }}"><p>Yerel API verileri yükleniyor…</p></section>
+{% if page_name == 'portfolio' %}
+<section class="notice">Bu defter tamamen manueldir. Broker bakiyesi okumaz, otomatik stop veya gerçek emir göndermez.</section>
+{% elif page_name == 'data' %}<section class="notice">yfinance verisi kişisel araştırma amaçlı best-effort kullanılır; günlük Stooq ve yerel dosya fallback’leri vardır.</section>
+{% elif page_name == 'backtests' %}<section class="notice">Sinyal t kapanışında oluşur ve en erken t+1 açılışında simüle edilir. Maliyetler varsayılan olarak sıfır değildir.</section>{% endif %}
+{% endblock %}

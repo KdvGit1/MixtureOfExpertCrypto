@@ -1,0 +1,11 @@
+universe_id: asia_large_cap
+display_name: Asya-Pasifik Büyük Şirketler
+as_of: "2026-08-11"
+source: "Curated cross-exchange research universe"
+survivorship_warning: true
+instruments:
+  - {instrument_id: "equity:XTKS:7203", symbol: "7203", display_name: Toyota Motor, asset_class: equity, exchange_mic: XTKS, currency: JPY, timezone: Asia/Tokyo, calendar: XTKS, country: JP, sector: Automotive, provider_symbols: {yfinance: 7203.T, stooq: 7203.JP}}
+  - {instrument_id: "equity:XTKS:6758", symbol: "6758", display_name: Sony Group, asset_class: equity, exchange_mic: XTKS, currency: JPY, timezone: Asia/Tokyo, calendar: XTKS, country: JP, sector: Technology, provider_symbols: {yfinance: 6758.T, stooq: 6758.JP}}
+  - {instrument_id: "equity:XHKG:0700", symbol: "0700", display_name: Tencent, asset_class: equity, exchange_mic: XHKG, currency: HKD, timezone: Asia/Hong_Kong, calendar: XHKG, country: HK, sector: Technology, provider_symbols: {yfinance: 0700.HK, stooq: 0700.HK}}
+  - {instrument_id: "equity:XKRX:005930", symbol: "005930", display_name: Samsung Electronics, asset_class: equity, exchange_mic: XKRX, currency: KRW, timezone: Asia/Seoul, calendar: XKRX, country: KR, sector: Technology, provider_symbols: {yfinance: 005930.KS, stooq: 005930.KR}}
+  - {instrument_id: "equity:XASX:BHP", symbol: BHP, display_name: BHP Group, asset_class: equity, exchange_mic: XASX, currency: AUD, timezone: Australia/Sydney, calendar: XASX, country: AU, sector: Materials, provider_symbols: {yfinance: BHP.AX, stooq: BHP.AU}}

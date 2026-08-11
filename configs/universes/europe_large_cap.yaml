@@ -1,0 +1,11 @@
+universe_id: europe_large_cap
+display_name: Avrupa Büyük Şirketler
+as_of: "2026-08-11"
+source: "Curated cross-exchange research universe"
+survivorship_warning: true
+instruments:
+  - {instrument_id: "equity:XETR:SAP", symbol: SAP, display_name: SAP, asset_class: equity, exchange_mic: XETR, currency: EUR, timezone: Europe/Berlin, calendar: XETR, country: DE, sector: Technology, provider_symbols: {yfinance: SAP.DE, stooq: SAP.DE}}
+  - {instrument_id: "equity:XETR:SIE", symbol: SIE, display_name: Siemens, asset_class: equity, exchange_mic: XETR, currency: EUR, timezone: Europe/Berlin, calendar: XETR, country: DE, sector: Industrials, provider_symbols: {yfinance: SIE.DE, stooq: SIE.DE}}
+  - {instrument_id: "equity:XAMS:ASML", symbol: ASML, display_name: ASML, asset_class: equity, exchange_mic: XAMS, currency: EUR, timezone: Europe/Amsterdam, calendar: XAMS, country: NL, sector: Technology, provider_symbols: {yfinance: ASML.AS, stooq: ASML.NL}}
+  - {instrument_id: "equity:XPAR:MC", symbol: MC, display_name: LVMH, asset_class: equity, exchange_mic: XPAR, currency: EUR, timezone: Europe/Paris, calendar: XPAR, country: FR, sector: Consumer, provider_symbols: {yfinance: MC.PA, stooq: MC.FR}}
+  - {instrument_id: "equity:XLON:SHEL", symbol: SHEL, display_name: Shell, asset_class: equity, exchange_mic: XLON, currency: GBP, timezone: Europe/London, calendar: XLON, country: GB, sector: Energy, provider_symbols: {yfinance: SHEL.L, stooq: SHEL.UK}}

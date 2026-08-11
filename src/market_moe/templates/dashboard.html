@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}MarketMoE · Genel Bakış{% endblock %}
+{% block content %}
+<section class="hero"><p class="eyebrow">MULTI-MARKET RESEARCH</p><h1>Kripto ve dünya borsaları, tek araştırma akışında.</h1>
+<p>Veriyi doğrula, MoE tahminini incele, maliyetli backtest çalıştır ve kararlarını manuel paper portföyde izle.</p></section>
+<section class="grid metrics">
+  <article><span>Sistem</span><strong class="{{ 'good' if health.healthy else 'bad' }}">{{ 'Hazır' if health.healthy else 'Kontrol gerekli' }}</strong></article>
+  <article><span>Evren</span><strong>{{ universes|length }}</strong></article>
+  <article><span>Emir bağlantısı</span><strong class="good">Kapalı</strong></article>
+  <article><span>Ücretli API</span><strong class="good">Yok</strong></article>
+</section>
+<h2>Piyasa evrenleri</h2><section class="grid">
+{% for universe in universes %}<article><p class="eyebrow">{{ universe.universe_id }}</p><h3>{{ universe.display_name }}</h3>
+<p>{{ universe.instruments|length }} enstrüman · {{ universe.as_of }}</p>{% if universe.survivorship_warning %}<small>Survivorship bias uyarısı aktif</small>{% endif %}</article>{% endfor %}
+</section>
+{% endblock %}

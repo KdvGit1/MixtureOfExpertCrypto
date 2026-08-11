@@ -1,0 +1,192 @@
+# MarketMoE one-click research pipeline for a Windows PC with a 12 GB CUDA GPU.
+# It uses only free public market-data endpoints and NEVER sends an order.
+pipeline_id: windows_cuda_full
+require_cuda: true
+minimum_vram_gb: 10.0
+minimum_free_disk_gb: 20.0
+download_retries: 3
+cache_latest_tolerance_days: 7
+resume: true
+auto_promote: false
+
+jobs:
+  - job_id: crypto_15m
+    enabled: true
+    model_id: crypto_moe
+    asset_class: crypto
+    universes: [crypto_major]
+    timeframe: 15m
+    history_days: 365
+    minimum_rows: 20000
+    minimum_instruments: 3
+    window: 120
+    horizon_bars: 1
+    embed_dim: 96
+    router_hidden_dim: 32
+    dropout: 0.20
+    branch_dropout_probability: 0.20
+    batch_size: 256
+    minimum_batch_size: 32
+    epochs: 35
+    patience: 7
+    learning_rate: 0.0002
+    weight_decay: 0.0001
+    gradient_clip: 1.0
+    seed: 20260811
+    branch_dropout_start_epoch: 4
+    probability_threshold: 0.58
+    allow_short: true
+    periods_per_year: 35040
+    initial_cash: 100000
+    maximum_position_fraction: 1.0
+    maximum_drawdown: 0.50
+    maximum_gap_fraction: 0.25
+    commission_bps: 5.0
+    spread_bps: 4.0
+    slippage_bps: 3.0
+    funding_bps_per_bar: 0.02
+    borrow_bps_per_bar: 0.01
+
+  - job_id: crypto_1h
+    enabled: true
+    model_id: crypto_moe
+    asset_class: crypto
+    universes: [crypto_major]
+    timeframe: 1h
+    history_days: 1460
+    minimum_rows: 20000
+    minimum_instruments: 3
+    window: 120
+    horizon_bars: 1
+    embed_dim: 96
+    router_hidden_dim: 32
+    dropout: 0.20
+    branch_dropout_probability: 0.20
+    batch_size: 256
+    minimum_batch_size: 32
+    epochs: 35
+    patience: 7
+    learning_rate: 0.0002
+    weight_decay: 0.0001
+    gradient_clip: 1.0
+    seed: 20260811
+    branch_dropout_start_epoch: 4
+    probability_threshold: 0.58
+    allow_short: true
+    periods_per_year: 8760
+    initial_cash: 100000
+    maximum_position_fraction: 1.0
+    maximum_drawdown: 0.50
+    maximum_gap_fraction: 0.25
+    commission_bps: 5.0
+    spread_bps: 4.0
+    slippage_bps: 3.0
+    funding_bps_per_bar: 0.08
+    borrow_bps_per_bar: 0.04
+
+  - job_id: crypto_1d
+    enabled: true
+    model_id: crypto_moe
+    asset_class: crypto
+    universes: [crypto_major]
+    timeframe: 1d
+    history_days: 3650
+    minimum_rows: 2200
+    minimum_instruments: 3
+    window: 120
+    horizon_bars: 1
+    embed_dim: 96
+    router_hidden_dim: 32
+    dropout: 0.20
+    branch_dropout_probability: 0.20
+    batch_size: 256
+    minimum_batch_size: 32
+    epochs: 40
+    patience: 8
+    learning_rate: 0.0002
+    weight_decay: 0.0001
+    gradient_clip: 1.0
+    seed: 20260811
+    branch_dropout_start_epoch: 4
+    probability_threshold: 0.58
+    allow_short: true
+    periods_per_year: 365
+    initial_cash: 100000
+    maximum_position_fraction: 1.0
+    maximum_drawdown: 0.50
+    maximum_gap_fraction: 0.25
+    commission_bps: 5.0
+    spread_bps: 4.0
+    slippage_bps: 3.0
+    funding_bps_per_bar: 2.0
+    borrow_bps_per_bar: 1.0
+
+  - job_id: global_equity_1d
+    enabled: true
+    model_id: equity_moe
+    asset_class: equity
+    universes: [bist30, us_large_cap, europe_large_cap, asia_large_cap]
+    timeframe: 1d
+    history_days: 5475
+    minimum_rows: 2200
+    minimum_instruments: 35
+    window: 120
+    horizon_bars: 1
+    embed_dim: 96
+    router_hidden_dim: 32
+    dropout: 0.20
+    branch_dropout_probability: 0.20
+    batch_size: 256
+    minimum_batch_size: 32
+    epochs: 40
+    patience: 8
+    learning_rate: 0.0002
+    weight_decay: 0.0001
+    gradient_clip: 1.0
+    seed: 20260811
+    branch_dropout_start_epoch: 4
+    probability_threshold: 0.58
+    allow_short: false
+    periods_per_year: 252
+    initial_cash: 100000
+    maximum_position_fraction: 1.0
+    maximum_drawdown: 0.50
+    maximum_gap_fraction: 0.25
+    commission_bps: 6.0
+    spread_bps: 5.0
+    slippage_bps: 4.0
+    funding_bps_per_bar: 0.0
+    borrow_bps_per_bar: 0.0
+
+  # Free providers do not offer uniform, long intraday equity histories across
+  # BIST/US/Europe/Asia. Enable only after adding licensed/local data imports.
+  - job_id: global_equity_1h
+    enabled: false
+    model_id: equity_moe
+    asset_class: equity
+    universes: [bist30, us_large_cap, europe_large_cap, asia_large_cap]
+    timeframe: 1h
+    history_days: 700
+    minimum_rows: 2000
+    minimum_instruments: 35
+    window: 120
+    horizon_bars: 1
+    embed_dim: 96
+    router_hidden_dim: 32
+    dropout: 0.20
+    branch_dropout_probability: 0.20
+    batch_size: 256
+    minimum_batch_size: 32
+    epochs: 35
+    patience: 7
+    learning_rate: 0.0002
+    weight_decay: 0.0001
+    gradient_clip: 1.0
+    seed: 20260811
+    branch_dropout_start_epoch: 4
+    probability_threshold: 0.58
+    allow_short: false
+    periods_per_year: 1638
+    commission_bps: 6.0
+    spread_bps: 5.0
+    slippage_bps: 4.0

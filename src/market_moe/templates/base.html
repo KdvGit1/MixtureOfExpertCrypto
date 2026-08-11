@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MarketMoE{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/">MarketMoE</a><span>Yerel araştırma terminali · v{{ version }}</span></header>
+  <div class="layout">
+    <nav>
+      <a href="/">Genel Bakış</a><a href="/pages/scanner">Scanner</a>
+      <a href="/pages/instrument">Enstrüman</a><a href="/pages/models">Modeller</a>
+      <a href="/pages/backtests">Backtest</a><a href="/pages/data">Veri</a>
+      <a href="/pages/portfolio">Paper Portfolio</a><a href="/pages/health">Sağlık</a>
+    </nav>
+    <main>{% block content %}{% endblock %}</main>
+  </div>
+  <footer>Ücretsiz/best-effort veri · Gecikme ve veri hatası olabilir · Yatırım tavsiyesi değildir · Gerçek emir göndermez.</footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

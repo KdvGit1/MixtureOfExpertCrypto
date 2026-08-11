@@ -1,0 +1,17 @@
+app:
+  name: MarketMoE
+  host: 127.0.0.1
+  port: 8080
+  base_currency: USD
+  disclaimer: >-
+    MarketMoE yalnızca araştırma ve karar desteği sağlar. Veriler ücretsiz,
+    gecikmeli veya eksik olabilir; içerik yatırım tavsiyesi değildir.
+
+features:
+  schema_version: "2.0.0"
+
+defaults:
+  equity_universe: bist30
+  crypto_universe: crypto_major
+  equity_timeframe: 1d
+  crypto_timeframe: 1h

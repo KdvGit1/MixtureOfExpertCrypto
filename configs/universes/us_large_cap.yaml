@@ -1,0 +1,14 @@
+universe_id: us_large_cap
+display_name: ABD Büyük Şirketler
+as_of: "2026-08-11"
+source: "Curated liquid research universe"
+survivorship_warning: true
+instruments:
+  - {instrument_id: "equity:XNAS:AAPL", symbol: AAPL, display_name: Apple, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Technology, provider_symbols: {yfinance: AAPL, stooq: AAPL.US}}
+  - {instrument_id: "equity:XNAS:MSFT", symbol: MSFT, display_name: Microsoft, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Technology, provider_symbols: {yfinance: MSFT, stooq: MSFT.US}}
+  - {instrument_id: "equity:XNAS:NVDA", symbol: NVDA, display_name: Nvidia, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Technology, provider_symbols: {yfinance: NVDA, stooq: NVDA.US}}
+  - {instrument_id: "equity:XNAS:AMZN", symbol: AMZN, display_name: Amazon, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Consumer, provider_symbols: {yfinance: AMZN, stooq: AMZN.US}}
+  - {instrument_id: "equity:XNAS:GOOGL", symbol: GOOGL, display_name: Alphabet, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Communication, provider_symbols: {yfinance: GOOGL, stooq: GOOGL.US}}
+  - {instrument_id: "equity:XNAS:META", symbol: META, display_name: Meta Platforms, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Communication, provider_symbols: {yfinance: META, stooq: META.US}}
+  - {instrument_id: "equity:XNYS:JPM", symbol: JPM, display_name: JPMorgan Chase, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Financials, provider_symbols: {yfinance: JPM, stooq: JPM.US}}
+  - {instrument_id: "equity:XNYS:XOM", symbol: XOM, display_name: Exxon Mobil, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Energy, provider_symbols: {yfinance: XOM, stooq: XOM.US}}

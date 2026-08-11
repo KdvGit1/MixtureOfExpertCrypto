@@ -1,0 +1,22 @@
+model_id: equity_moe
+asset_class: equity
+timeframes: [1d, 1h]
+horizon_bars: 1
+windows:
+  local: 12
+  trend: 60
+  regime: 120
+architecture:
+  embed_dim: 96
+  dropout: 0.20
+  router_hidden_dim: 32
+training:
+  batch_size: 256
+  learning_rate: 0.0002
+  max_epochs: 40
+  patience: 7
+  branch_dropout_start_epoch: 4
+  branch_dropout_probability: 0.20
+  contrastive_enabled: false
+  ogm_ge_enabled: false
+  seed: 20260811

@@ -1,0 +1,11 @@
+universe_id: crypto_major
+display_name: Major Kripto Varlıklar
+as_of: "2026-08-11"
+source: "CCXT public market discovery; curated liquid pairs"
+survivorship_warning: true
+instruments:
+  - {instrument_id: "crypto:BINANCE:BTCUSDT", symbol: BTCUSDT, display_name: Bitcoin, asset_class: crypto, exchange_mic: BINANCE, currency: USDT, timezone: UTC, calendar: "24/7", country: null, sector: Layer1, provider_symbols: {ccxt: "BTC/USDT", ccxt_binance: "BTC/USDT", ccxt_bitget: "BTC/USDT"}}
+  - {instrument_id: "crypto:BINANCE:ETHUSDT", symbol: ETHUSDT, display_name: Ethereum, asset_class: crypto, exchange_mic: BINANCE, currency: USDT, timezone: UTC, calendar: "24/7", country: null, sector: Layer1, provider_symbols: {ccxt: "ETH/USDT", ccxt_binance: "ETH/USDT", ccxt_bitget: "ETH/USDT"}}
+  - {instrument_id: "crypto:BINANCE:BNBUSDT", symbol: BNBUSDT, display_name: BNB, asset_class: crypto, exchange_mic: BINANCE, currency: USDT, timezone: UTC, calendar: "24/7", country: null, sector: Layer1, provider_symbols: {ccxt: "BNB/USDT", ccxt_binance: "BNB/USDT", ccxt_bitget: "BNB/USDT"}}
+  - {instrument_id: "crypto:BINANCE:SOLUSDT", symbol: SOLUSDT, display_name: Solana, asset_class: crypto, exchange_mic: BINANCE, currency: USDT, timezone: UTC, calendar: "24/7", country: null, sector: Layer1, provider_symbols: {ccxt: "SOL/USDT", ccxt_binance: "SOL/USDT", ccxt_bitget: "SOL/USDT"}}
+  - {instrument_id: "crypto:BINANCE:XRPUSDT", symbol: XRPUSDT, display_name: XRP, asset_class: crypto, exchange_mic: BINANCE, currency: USDT, timezone: UTC, calendar: "24/7", country: null, sector: Payments, provider_symbols: {ccxt: "XRP/USDT", ccxt_binance: "XRP/USDT", ccxt_bitget: "XRP/USDT"}}
