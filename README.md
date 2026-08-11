@@ -153,9 +153,6 @@ data/                  Yerel cache/import (Git dışında)
 artifacts/             Model/backtest/rapor çıktıları (Git dışında)
 ```
 
-Önceki runtime, bot, notebook, model ve sonuç dosyaları aktif çalışma ağacından kaldırılmıştır.
-Gerekirse yalnız Git geçmişinden geri getirilebilir.
-
 ## Dokümantasyon
 
 - [Kullanıcı rehberi](docs/user-guide.md)
