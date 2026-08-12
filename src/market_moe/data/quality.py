@@ -89,6 +89,11 @@ def validate_bar_frame(
         warnings.append("invalid_ohlc")
     if stale:
         warnings.append("stale_data")
+    quality_flags = result["quality_flags"].fillna("").astype(str)
+    if quality_flags.str.contains("ohlc_envelope_repaired", regex=False).any():
+        warnings.append("provider_ohlc_envelope_repaired")
+    if quality_flags.str.contains("provider_invalid_rows_dropped=", regex=False).any():
+        warnings.append("provider_invalid_ohlc_rows_dropped")
 
     valid = row_count > 0 and not duplicate_timestamps and not missing_values and not invalid_prices
     report = DataQualityReport(

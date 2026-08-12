@@ -4,7 +4,7 @@ pipeline_id: windows_cuda_full
 require_cuda: true
 minimum_vram_gb: 10.0
 minimum_free_disk_gb: 20.0
-download_retries: 3
+download_retries: 5
 cache_latest_tolerance_days: 7
 resume: true
 auto_promote: false
@@ -16,9 +16,9 @@ jobs:
     asset_class: crypto
     universes: [crypto_major]
     timeframe: 15m
-    history_days: 365
-    minimum_rows: 20000
-    minimum_instruments: 3
+    history_days: 730
+    minimum_usable_rows: 3000
+    require_complete_universe: true
     window: 120
     horizon_bars: 1
     embed_dim: 96
@@ -53,9 +53,9 @@ jobs:
     asset_class: crypto
     universes: [crypto_major]
     timeframe: 1h
-    history_days: 1460
-    minimum_rows: 20000
-    minimum_instruments: 3
+    history_days: 1825
+    minimum_usable_rows: 3000
+    require_complete_universe: true
     window: 120
     horizon_bars: 1
     embed_dim: 96
@@ -91,8 +91,8 @@ jobs:
     universes: [crypto_major]
     timeframe: 1d
     history_days: 3650
-    minimum_rows: 2200
-    minimum_instruments: 3
+    minimum_usable_rows: 360
+    require_complete_universe: true
     window: 120
     horizon_bars: 1
     embed_dim: 96
@@ -127,9 +127,9 @@ jobs:
     asset_class: equity
     universes: [bist30, us_large_cap, europe_large_cap, asia_large_cap]
     timeframe: 1d
-    history_days: 5475
-    minimum_rows: 2200
-    minimum_instruments: 35
+    history_days: 9125
+    minimum_usable_rows: 360
+    require_complete_universe: true
     window: 120
     horizon_bars: 1
     embed_dim: 96
@@ -167,8 +167,8 @@ jobs:
     universes: [bist30, us_large_cap, europe_large_cap, asia_large_cap]
     timeframe: 1h
     history_days: 700
-    minimum_rows: 2000
-    minimum_instruments: 35
+    minimum_usable_rows: 1000
+    require_complete_universe: true
     window: 120
     horizon_bars: 1
     embed_dim: 96

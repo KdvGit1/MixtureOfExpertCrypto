@@ -1,6 +1,6 @@
 universe_id: us_large_cap
 display_name: ABD Büyük Şirketler
-as_of: "2026-08-11"
+as_of: "2026-08-12"
 source: "Curated liquid research universe"
 survivorship_warning: true
 instruments:
@@ -12,3 +12,25 @@ instruments:
   - {instrument_id: "equity:XNAS:META", symbol: META, display_name: Meta Platforms, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Communication, provider_symbols: {yfinance: META, stooq: META.US}}
   - {instrument_id: "equity:XNYS:JPM", symbol: JPM, display_name: JPMorgan Chase, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Financials, provider_symbols: {yfinance: JPM, stooq: JPM.US}}
   - {instrument_id: "equity:XNYS:XOM", symbol: XOM, display_name: Exxon Mobil, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Energy, provider_symbols: {yfinance: XOM, stooq: XOM.US}}
+  - {instrument_id: "equity:XNYS:BRK-B", symbol: BRK-B, display_name: Berkshire Hathaway, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Financials, provider_symbols: {yfinance: BRK-B, stooq: BRK-B.US}}
+  - {instrument_id: "equity:XNAS:AVGO", symbol: AVGO, display_name: Broadcom, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Technology, provider_symbols: {yfinance: AVGO, stooq: AVGO.US}}
+  - {instrument_id: "equity:XNAS:TSLA", symbol: TSLA, display_name: Tesla, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Automotive, provider_symbols: {yfinance: TSLA, stooq: TSLA.US}}
+  - {instrument_id: "equity:XNYS:WMT", symbol: WMT, display_name: Walmart, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Consumer, provider_symbols: {yfinance: WMT, stooq: WMT.US}}
+  - {instrument_id: "equity:XNYS:LLY", symbol: LLY, display_name: Eli Lilly, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Healthcare, provider_symbols: {yfinance: LLY, stooq: LLY.US}}
+  - {instrument_id: "equity:XNYS:V", symbol: V, display_name: Visa, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Financials, provider_symbols: {yfinance: V, stooq: V.US}}
+  - {instrument_id: "equity:XNYS:MA", symbol: MA, display_name: Mastercard, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Financials, provider_symbols: {yfinance: MA, stooq: MA.US}}
+  - {instrument_id: "equity:XNAS:COST", symbol: COST, display_name: Costco, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Consumer, provider_symbols: {yfinance: COST, stooq: COST.US}}
+  - {instrument_id: "equity:XNAS:NFLX", symbol: NFLX, display_name: Netflix, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Communication, provider_symbols: {yfinance: NFLX, stooq: NFLX.US}}
+  - {instrument_id: "equity:XNYS:ORCL", symbol: ORCL, display_name: Oracle, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Technology, provider_symbols: {yfinance: ORCL, stooq: ORCL.US}}
+  - {instrument_id: "equity:XNYS:HD", symbol: HD, display_name: Home Depot, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Consumer, provider_symbols: {yfinance: HD, stooq: HD.US}}
+  - {instrument_id: "equity:XNYS:PG", symbol: PG, display_name: Procter and Gamble, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Consumer, provider_symbols: {yfinance: PG, stooq: PG.US}}
+  - {instrument_id: "equity:XNYS:JNJ", symbol: JNJ, display_name: Johnson and Johnson, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Healthcare, provider_symbols: {yfinance: JNJ, stooq: JNJ.US}}
+  - {instrument_id: "equity:XNYS:BAC", symbol: BAC, display_name: Bank of America, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Financials, provider_symbols: {yfinance: BAC, stooq: BAC.US}}
+  - {instrument_id: "equity:XNYS:ABBV", symbol: ABBV, display_name: AbbVie, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Healthcare, provider_symbols: {yfinance: ABBV, stooq: ABBV.US}}
+  - {instrument_id: "equity:XNYS:KO", symbol: KO, display_name: Coca-Cola, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Consumer, provider_symbols: {yfinance: KO, stooq: KO.US}}
+  - {instrument_id: "equity:XNAS:PEP", symbol: PEP, display_name: PepsiCo, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Consumer, provider_symbols: {yfinance: PEP, stooq: PEP.US}}
+  - {instrument_id: "equity:XNYS:CRM", symbol: CRM, display_name: Salesforce, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Technology, provider_symbols: {yfinance: CRM, stooq: CRM.US}}
+  - {instrument_id: "equity:XNAS:CSCO", symbol: CSCO, display_name: Cisco, asset_class: equity, exchange_mic: XNAS, currency: USD, timezone: America/New_York, calendar: XNAS, country: US, sector: Technology, provider_symbols: {yfinance: CSCO, stooq: CSCO.US}}
+  - {instrument_id: "equity:XNYS:CVX", symbol: CVX, display_name: Chevron, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Energy, provider_symbols: {yfinance: CVX, stooq: CVX.US}}
+  - {instrument_id: "equity:XNYS:IBM", symbol: IBM, display_name: IBM, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Technology, provider_symbols: {yfinance: IBM, stooq: IBM.US}}
+  - {instrument_id: "equity:XNYS:MCD", symbol: MCD, display_name: McDonald's, asset_class: equity, exchange_mic: XNYS, currency: USD, timezone: America/New_York, calendar: XNYS, country: US, sector: Consumer, provider_symbols: {yfinance: MCD, stooq: MCD.US}}

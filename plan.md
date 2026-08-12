@@ -1580,8 +1580,12 @@ Sonuç: Golden tolerans testleriyle davranış farkları kontrol edilir.
 
 - 2026-08-11: Kullanıcı onayıyla önceki runtime, model, veri ve sonuç dosyaları aktif
   çalışma ağacından kaldırıldı. Git geçmişi geri dönüş amacıyla korundu.
+- 2026-08-12: Yahoo adjusted OHLC kayan-nokta sapmaları için kontrollü provider sanitization
+  eklendi; sabit minimum-enstrüman eşiği kaldırılıp tam-universe politikası getirildi.
+- 2026-08-12: Evren 20 kripto ve 120 global hisse olmak üzere 140 enstrümana genişletildi;
+  Yahoo sembollerinin 120/120'si, Binance paritelerinin 20/20'si canlı doğrulandı.
 - 2026-08-11: BIST resmi 24.11.2025 işlem kodu değişikliğine göre KOZAL kimliği
-  TRALT olarak güncellendi; 53/53 public data-health doğrulaması alındı.
+  TRALT olarak güncellendi.
 
 | Sürüm | Tarih | Değişiklik |
 |---|---|---|

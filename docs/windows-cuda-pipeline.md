@@ -49,11 +49,15 @@ devam eder.
 
 | İş | Evren | Periyot | Yön | Durum |
 |---|---|---:|---|---|
-| `crypto_15m` | BTC, ETH, BNB, SOL, XRP | 15 dakika | Long/short | Etkin |
-| `crypto_1h` | BTC, ETH, BNB, SOL, XRP | 1 saat | Long/short | Etkin |
-| `crypto_1d` | BTC, ETH, BNB, SOL, XRP | 1 gün | Long/short | Etkin |
-| `global_equity_1d` | BIST30, ABD, Avrupa, Asya | 1 gün | Long-only | Etkin |
+| `crypto_15m` | 20 likit USDT paritesi | 15 dakika / 2 yıl | Long/short | Etkin |
+| `crypto_1h` | 20 likit USDT paritesi | 1 saat / 5 yıl | Long/short | Etkin |
+| `crypto_1d` | 20 likit USDT paritesi | 1 gün / 10 yıl istek | Long/short | Etkin |
+| `global_equity_1d` | 120 BIST/ABD/Avrupa/Asya hissesi | 1 gün / 25 yıl istek | Long-only | Etkin |
 | `global_equity_1h` | Aynı hisse evrenleri | 1 saat | Long-only | Devre dışı |
+
+Sağlayıcıların listeleme tarihlerine bağlı olarak yaklaşık üç milyon ham bar hedeflenir. Daha
+yeni varlıkların doğal olarak daha kısa geçmişi olabilir; yine de yeterli özellik penceresi varsa
+global zaman kilidindeki uygun train, validation veya test katına dahil edilir.
 
 Global hisse intraday işi varsayılan olarak kapalıdır; ücretsiz kaynaklar bütün ülkelerde yeterli,
 uzun ve eşit kapsamlı saatlik geçmiş sağlamaz. Yerel/lisanslı veri eklendiğinde
@@ -84,6 +88,9 @@ Tamamlanmış işler için yeni model sürümleri oluşturup yeniden eğitim:
 ```bat
 RUN_FULL_CUDA_PIPELINE.bat --force
 ```
+
+Pipeline config'i veya universe içeriği değiştiğinde imza da değişir; tamamlanmış eski iş otomatik
+atlanmaz ve yeni model sürümü oluşturulur. Aynı imzayla kesilen iş ise checkpoint'ten devam eder.
 
 CPU üzerinde yalnız geliştirme/smoke denemesi için Python entrypoint doğrudan kullanılabilir:
 
@@ -129,8 +136,11 @@ train-only normalizasyon, calibration, test metrikleri, model card ve eğitim ge
 ## Hata davranışı
 
 - Kriptoda Binance public veri erişimi başarısızsa public Bitget kaynağı denenir.
-- Veri isteği üç kez artan bekleme ile denenir; yeterli cache varsa ağ hatasında cache kullanılır.
-- Birkaç sembol başarısız olabilir; iş yalnız config'deki minimum enstrüman sayısı sağlanırsa sürer.
+- Veri isteği beş kez artan bekleme ile denenir; yeterli cache varsa ağ hatasında cache kullanılır.
+- Sabit “minimum 35” eşiği yoktur. Varsayılan politika seçilen evrenin `%100` hazır olmasını ister;
+  tek eksik sembol bile eksik listesiyle işi durdurur ve sessizce daha küçük veriyle eğitime geçmez.
+- Adjusted OHLC'deki küçük kayan-nokta/zarf farkları konservatif biçimde düzeltilip catalog'a
+  işaretlenir. Yaygın veya büyük bozulma hâlâ veri kalite hatasıdır.
 - CUDA bellek taşmasında batch `256 -> 128 -> 64 -> 32` küçültülür ve checkpoint'ten devam edilir.
 - Bir işin hatası kaydedilir; kalan bağımsız işler çalışmaya devam eder.
 - Süreç sonunda sıfır olmayan çıkış kodu, en az bir işin tamamlanamadığını ifade eder.

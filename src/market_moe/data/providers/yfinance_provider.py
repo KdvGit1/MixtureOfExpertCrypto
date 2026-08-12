@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from market_moe.data.providers.common import provider_frame_to_canonical
+from market_moe.data.providers.common import provider_frame_to_canonical, sanitize_provider_ohlc
 from market_moe.domain.errors import DataProviderError
 from market_moe.domain.instruments import Instrument
 
@@ -38,7 +38,6 @@ class YFinanceProvider:
                 auto_adjust=adjusted,
                 actions=False,
                 repair=True,
-                raise_errors=True,
             )
         except Exception as exc:
             raise DataProviderError(
@@ -49,13 +48,15 @@ class YFinanceProvider:
             raise DataProviderError(f"yfinance returned no rows for {instrument.symbol}")
         raw = raw.rename(columns=str.lower)
         raw.index.name = "open_time_utc"
-        return provider_frame_to_canonical(
-            raw,
-            instrument=instrument,
-            timeframe=timeframe,
-            provider=self.name,
-            provider_symbol=symbol,
-            adjusted=adjusted,
+        return sanitize_provider_ohlc(
+            provider_frame_to_canonical(
+                raw,
+                instrument=instrument,
+                timeframe=timeframe,
+                provider=self.name,
+                provider_symbol=symbol,
+                adjusted=adjusted,
+            )
         )
 
     def healthcheck(self) -> dict[str, object]:

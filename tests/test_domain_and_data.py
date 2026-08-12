@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from market_moe.data.cache import ParquetBarCache
+from market_moe.data.providers.common import sanitize_provider_ohlc
 from market_moe.data.quality import deduplicate_bars, validate_bar_frame
 from market_moe.domain.errors import DataQualityError
 from market_moe.domain.instruments import AssetClass, Instrument
@@ -32,6 +33,24 @@ def test_quality_detects_invalid_ohlc(crypto_bars: pd.DataFrame) -> None:
     assert report.invalid_prices == 1
     with pytest.raises(DataQualityError):
         validate_bar_frame(crypto_bars, raise_on_error=True)
+
+
+def test_provider_ohlc_sanitizer_preserves_long_series(crypto_bars: pd.DataFrame) -> None:
+    rounding = crypto_bars.copy()
+    row = 3
+    upper = max(rounding.loc[row, "open"], rounding.loc[row, "close"])
+    rounding.loc[row, "high"] = upper * (1 - 1e-14)
+    repaired = sanitize_provider_ohlc(rounding)
+    report = validate_bar_frame(repaired, raise_on_error=True)
+    assert len(repaired) == len(rounding)
+    assert "provider_ohlc_envelope_repaired" in report.warnings
+
+    isolated_corruption = crypto_bars.copy()
+    isolated_corruption.loc[row, ["open", "high", "low", "close"]] = 0.0
+    cleaned = sanitize_provider_ohlc(isolated_corruption)
+    cleaned_report = validate_bar_frame(cleaned, raise_on_error=True)
+    assert len(cleaned) == len(isolated_corruption) - 1
+    assert "provider_invalid_ohlc_rows_dropped" in cleaned_report.warnings
 
 
 def test_deduplicate_keeps_latest_ingestion(crypto_bars: pd.DataFrame) -> None:

@@ -161,7 +161,7 @@ def _prepare(
             horizon_bars=spec.horizon_bars,
             include_targets=True,
         )
-        if len(featured.frame) >= spec.window * 3:
+        if len(featured.frame) >= spec.window:
             transformed.append((instrument, bars, featured.frame, featured.schema))
     if not transformed:
         raise ValueError("no instrument has enough clean feature rows for three folds")
@@ -185,7 +185,7 @@ def _prepare(
             right=spec.horizon_bars,
         )
         test = _purge(frame.loc[days >= validation_end], left=spec.horizon_bars)
-        if min(len(train), len(validation), len(test)) >= spec.window:
+        if max(len(train), len(validation), len(test)) >= spec.window:
             prepared.append(PreparedInstrument(instrument, bars, train, validation, test))
     if not prepared:
         raise ValueError(
@@ -384,12 +384,22 @@ def train_pooled_model(
     spec.validate()
     report = log or (lambda _message: None)
     prepared, schema = _prepare(sources, spec)
-    report(f"{spec.job_id}: {len(prepared)} instruments passed feature/split checks")
-    train_pool = pd.concat([item.train for item in prepared])
+    train_items = [item for item in prepared if len(item.train) >= spec.window]
+    validation_items = [item for item in prepared if len(item.validation) >= spec.window]
+    test_items = [item for item in prepared if len(item.test) >= spec.window]
+    if not train_items or not validation_items or not test_items:
+        raise ValueError(
+            "global split needs at least one train, validation and locked-test contributor"
+        )
+    report(
+        f"{spec.job_id}: {len(prepared)} instruments usable; contributors "
+        f"train={len(train_items)} validation={len(validation_items)} test={len(test_items)}"
+    )
+    train_pool = pd.concat([item.train for item in train_items])
     normalization = NormalizationStats.fit(train_pool, schema.feature_names)
-    normalized_train = [normalization.transform(item.train) for item in prepared]
-    normalized_validation = [normalization.transform(item.validation) for item in prepared]
-    normalized_test = [normalization.transform(item.test) for item in prepared]
+    normalized_train = [normalization.transform(item.train) for item in train_items]
+    normalized_validation = [normalization.transform(item.validation) for item in validation_items]
+    normalized_test = [normalization.transform(item.test) for item in test_items]
     using_cuda = device.startswith("cuda")
     train_loader = _loader(
         normalized_train,
@@ -472,6 +482,9 @@ def train_pooled_model(
         ),
         "test_windows": sum(len(frame) - spec.window + 1 for frame in normalized_test),
         "eligible_instruments": len(prepared),
+        "train_instruments": len(train_items),
+        "validation_instruments": len(validation_items),
+        "test_instruments": len(test_items),
         "test_fold_used_for_selection": False,
     }
     manifest = ModelManifest(
@@ -483,9 +496,9 @@ def train_pooled_model(
         feature_schema_hash=schema.schema_hash,
         symbols=[item.instrument.instrument_id for item in prepared],
         date_ranges={
-            "train": _date_range([item.train for item in prepared]),
-            "validation": _date_range([item.validation for item in prepared]),
-            "test": _date_range([item.test for item in prepared]),
+            "train": _date_range([item.train for item in train_items]),
+            "validation": _date_range([item.validation for item in validation_items]),
+            "test": _date_range([item.test for item in test_items]),
             "purge_bars": spec.horizon_bars,
             "test_locked_until_final_evaluation": True,
         },
@@ -510,7 +523,7 @@ def train_pooled_model(
     ModelRegistry(registry_root).register(manifest, bundle_path)
     backtests: dict[str, dict[str, object]] = {}
     warnings: list[str] = []
-    for item, normalized in zip(prepared, normalized_test, strict=True):
+    for item, normalized in zip(test_items, normalized_test, strict=True):
         instrument_output = backtest_root / _safe_name(item.instrument.instrument_id)
         try:
             summary, _predictions = _instrument_backtest(

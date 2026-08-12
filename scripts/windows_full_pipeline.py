@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import html
 import json
 import logging
@@ -30,6 +31,7 @@ from market_moe.settings import Settings
 from market_moe.training.pipeline import PooledTrainingSpec, train_pooled_model
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PIPELINE_CONTRACT_VERSION = 2
 
 
 class JobConfig(BaseModel):
@@ -42,8 +44,8 @@ class JobConfig(BaseModel):
     universes: list[str]
     timeframe: str
     history_days: int = Field(ge=30)
-    minimum_rows: int = Field(ge=100)
-    minimum_instruments: int = Field(ge=1)
+    minimum_usable_rows: int = Field(ge=100)
+    require_complete_universe: bool = True
     window: int = Field(default=120, ge=2)
     horizon_bars: int = Field(default=1, ge=1)
     train_fraction: float = 0.70
@@ -80,6 +82,8 @@ class JobConfig(BaseModel):
             raise ValueError("train + validation fractions must leave a test fold")
         if self.minimum_batch_size > self.batch_size:
             raise ValueError("minimum_batch_size cannot exceed batch_size")
+        if self.minimum_usable_rows < self.window + 202:
+            raise ValueError("minimum_usable_rows must cover EMA-200 warmup plus model window")
         return self
 
 
@@ -219,12 +223,23 @@ def instruments_for(job: JobConfig, settings: Settings) -> list[Instrument]:
     return list(selected.values())
 
 
+def job_signature(job: JobConfig, instruments: list[Instrument]) -> str:
+    payload = {
+        "pipeline_contract_version": PIPELINE_CONTRACT_VERSION,
+        "job": job.model_dump(mode="json"),
+        "instruments": [item.model_dump(mode="json") for item in instruments],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _candidate_providers(instrument: Instrument) -> list[str]:
-    return (
-        ["ccxt_binance", "ccxt_bitget"]
-        if instrument.asset_class == AssetClass.CRYPTO
-        else ["yfinance", "stooq"]
-    )
+    if instrument.asset_class == AssetClass.CRYPTO:
+        return ["ccxt_binance", "ccxt_bitget"]
+    providers = ["yfinance"]
+    if instrument.country == "US" and "stooq" in instrument.provider_symbols:
+        providers.append("stooq")
+    return providers
 
 
 def _best_cache(
@@ -294,12 +309,12 @@ def load_or_download(
         start=start,
         end=end,
         timeframe=job.timeframe,
-        minimum_rows=job.minimum_rows,
+        minimum_rows=job.minimum_usable_rows,
         latest_tolerance_days=config.cache_latest_tolerance_days,
     ):
         return cached, str(cached_provider), None
     if offline:
-        if cached is not None and len(cached) >= job.minimum_rows:
+        if cached is not None and len(cached) >= job.minimum_usable_rows:
             return cached, str(cached_provider), "offline mode used incomplete/stale cache"
         raise RuntimeError("offline cache is missing or too short")
 
@@ -319,12 +334,12 @@ def load_or_download(
                         cached,
                         start=start,
                         end=end,
-                        minimum_rows=job.minimum_rows,
+                        minimum_rows=job.minimum_usable_rows,
                     )
                 ):
                     latest = pd.to_datetime(cached["open_time_utc"], utc=True).max()
                     fetch_start = (latest - timeframe_delta(job.timeframe) * 2).to_pydatetime()
-                service.fetch(
+                _fetched, quality_report = service.fetch(
                     instrument,
                     job.timeframe,
                     fetch_start,
@@ -333,10 +348,15 @@ def load_or_download(
                     adjusted=provider != "stooq",
                 )
                 loaded = service.cache.load(provider, instrument, job.timeframe)
-                if loaded is None or len(loaded) < job.minimum_rows:
+                if loaded is None or len(loaded) < job.minimum_usable_rows:
                     count = 0 if loaded is None else len(loaded)
-                    raise RuntimeError(f"only {count} rows; need at least {job.minimum_rows}")
-                return loaded, provider, None
+                    raise RuntimeError(
+                        f"only {count} usable rows; need at least {job.minimum_usable_rows}"
+                    )
+                quality_note = (
+                    ",".join(quality_report.warnings) if quality_report.warnings else None
+                )
+                return loaded, provider, quality_note
             except Exception as error:
                 last_error = error
                 logger.warning(
@@ -355,7 +375,7 @@ def load_or_download(
             )
         if attempt < config.download_retries:
             time.sleep(min(30, 2**attempt))
-    if cached is not None and len(cached) >= job.minimum_rows:
+    if cached is not None and len(cached) >= job.minimum_usable_rows:
         return cached, str(cached_provider), f"network failed; cache used: {last_error}"
     raise RuntimeError(str(last_error))
 
@@ -458,12 +478,21 @@ def run() -> int:
             raise ValueError(f"unknown or disabled --only jobs: {sorted(unknown)}")
         enabled = [job for job in enabled if job.job_id in requested]
     if args.check:
+        check_settings = Settings(project_root=PROJECT_ROOT)
         print(
             json.dumps(
                 {
                     "valid": True,
                     "pipeline_id": config.pipeline_id,
-                    "enabled_jobs": [job.job_id for job in enabled],
+                    "enabled_jobs": [
+                        {
+                            "job_id": job.job_id,
+                            "expected_instruments": len(instruments_for(job, check_settings)),
+                            "require_complete_universe": job.require_complete_universe,
+                            "history_days": job.history_days,
+                        }
+                        for job in enabled
+                    ],
                     "auto_promote": config.auto_promote,
                 },
                 indent=2,
@@ -500,21 +529,32 @@ def run() -> int:
         for job in enabled:
             previous = state_jobs.get(job.job_id, {})
             previous = previous if isinstance(previous, dict) else {}
+            selected_instruments = instruments_for(job, settings)
+            signature = job_signature(job, selected_instruments)
+            signature_changed = previous.get("job_signature") != signature
             previous_bundle = Path(str(previous.get("bundle", "")))
             if (
                 not args.force
+                and not signature_changed
                 and previous.get("status") == "completed"
                 and _complete_bundle(previous_bundle)
             ):
                 logger.info("%s already completed; skipping", job.job_id)
                 continue
-            version = str(previous.get("version", "")) if not args.force else ""
+            if signature_changed and previous:
+                logger.info("%s config/universe changed; creating a new model version", job.job_id)
+            version = (
+                str(previous.get("version", ""))
+                if not args.force and not signature_changed
+                else ""
+            )
             if not version:
                 stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
                 version = f"{stamp}-{job.job_id}"
             job_state: dict[str, object] = {
                 "status": "downloading",
                 "version": version,
+                "job_signature": signature,
                 "started_at_utc": datetime.now(UTC).isoformat(),
                 "instruments": {},
             }
@@ -525,7 +565,8 @@ def run() -> int:
             providers: set[str] = set()
             warnings: list[str] = []
             logger.info("%s data stage started", job.job_id)
-            for instrument in instruments_for(job, settings):
+            job_state["expected_instruments"] = len(selected_instruments)
+            for instrument in selected_instruments:
                 try:
                     frame, provider, warning = load_or_download(
                         service,
@@ -545,6 +586,7 @@ def run() -> int:
                     }
                     if warning:
                         warnings.append(f"{instrument.instrument_id}: {warning}")
+                        logger.info("%s quality notes: %s", instrument.instrument_id, warning)
                     logger.info(
                         "%s ready (%s, %d rows)", instrument.instrument_id, provider, len(frame)
                     )
@@ -558,10 +600,18 @@ def run() -> int:
                 state["updated_at_utc"] = datetime.now(UTC).isoformat()
                 atomic_json(state_path, state)
 
-            if len(sources) < job.minimum_instruments:
+            ready_ratio = len(sources) / len(selected_instruments)
+            job_state["ready_instruments"] = len(sources)
+            job_state["data_coverage_ratio"] = ready_ratio
+            if job.require_complete_universe and len(sources) != len(selected_instruments):
+                missing = sorted(
+                    instrument.instrument_id
+                    for instrument in selected_instruments
+                    if instrument.instrument_id not in {item.instrument_id for item, _ in sources}
+                )
                 error = (
-                    f"only {len(sources)} instruments ready; "
-                    f"minimum is {job.minimum_instruments}"
+                    f"incomplete universe: {len(sources)}/{len(selected_instruments)} ready; "
+                    f"missing={missing}"
                 )
                 job_state.update(
                     {

@@ -1,6 +1,6 @@
 universe_id: europe_large_cap
 display_name: Avrupa Büyük Şirketler
-as_of: "2026-08-11"
+as_of: "2026-08-12"
 source: "Curated cross-exchange research universe"
 survivorship_warning: true
 instruments:
@@ -9,3 +9,28 @@ instruments:
   - {instrument_id: "equity:XAMS:ASML", symbol: ASML, display_name: ASML, asset_class: equity, exchange_mic: XAMS, currency: EUR, timezone: Europe/Amsterdam, calendar: XAMS, country: NL, sector: Technology, provider_symbols: {yfinance: ASML.AS, stooq: ASML.NL}}
   - {instrument_id: "equity:XPAR:MC", symbol: MC, display_name: LVMH, asset_class: equity, exchange_mic: XPAR, currency: EUR, timezone: Europe/Paris, calendar: XPAR, country: FR, sector: Consumer, provider_symbols: {yfinance: MC.PA, stooq: MC.FR}}
   - {instrument_id: "equity:XLON:SHEL", symbol: SHEL, display_name: Shell, asset_class: equity, exchange_mic: XLON, currency: GBP, timezone: Europe/London, calendar: XLON, country: GB, sector: Energy, provider_symbols: {yfinance: SHEL.L, stooq: SHEL.UK}}
+  - {instrument_id: "equity:XSWX:NESN", symbol: NESN, display_name: Nestle, asset_class: equity, exchange_mic: XSWX, currency: CHF, timezone: Europe/Zurich, calendar: XSWX, country: CH, sector: Consumer, provider_symbols: {yfinance: NESN.SW}}
+  - {instrument_id: "equity:XSWX:NOVN", symbol: NOVN, display_name: Novartis, asset_class: equity, exchange_mic: XSWX, currency: CHF, timezone: Europe/Zurich, calendar: XSWX, country: CH, sector: Healthcare, provider_symbols: {yfinance: NOVN.SW}}
+  - {instrument_id: "equity:XSWX:UBSG", symbol: UBSG, display_name: UBS Group, asset_class: equity, exchange_mic: XSWX, currency: CHF, timezone: Europe/Zurich, calendar: XSWX, country: CH, sector: Financials, provider_symbols: {yfinance: UBSG.SW}}
+  - {instrument_id: "equity:XLON:AZN", symbol: AZN, display_name: AstraZeneca, asset_class: equity, exchange_mic: XLON, currency: GBP, timezone: Europe/London, calendar: XLON, country: GB, sector: Healthcare, provider_symbols: {yfinance: AZN.L}}
+  - {instrument_id: "equity:XLON:HSBA", symbol: HSBA, display_name: HSBC Holdings, asset_class: equity, exchange_mic: XLON, currency: GBP, timezone: Europe/London, calendar: XLON, country: GB, sector: Financials, provider_symbols: {yfinance: HSBA.L}}
+  - {instrument_id: "equity:XLON:ULVR", symbol: ULVR, display_name: Unilever, asset_class: equity, exchange_mic: XLON, currency: GBP, timezone: Europe/London, calendar: XLON, country: GB, sector: Consumer, provider_symbols: {yfinance: ULVR.L}}
+  - {instrument_id: "equity:XPAR:TTE", symbol: TTE, display_name: TotalEnergies, asset_class: equity, exchange_mic: XPAR, currency: EUR, timezone: Europe/Paris, calendar: XPAR, country: FR, sector: Energy, provider_symbols: {yfinance: TTE.PA}}
+  - {instrument_id: "equity:XPAR:OR", symbol: OR, display_name: L'Oreal, asset_class: equity, exchange_mic: XPAR, currency: EUR, timezone: Europe/Paris, calendar: XPAR, country: FR, sector: Consumer, provider_symbols: {yfinance: OR.PA}}
+  - {instrument_id: "equity:XPAR:AIR", symbol: AIR, display_name: Airbus, asset_class: equity, exchange_mic: XPAR, currency: EUR, timezone: Europe/Paris, calendar: XPAR, country: FR, sector: Industrials, provider_symbols: {yfinance: AIR.PA}}
+  - {instrument_id: "equity:XPAR:SU", symbol: SU, display_name: Schneider Electric, asset_class: equity, exchange_mic: XPAR, currency: EUR, timezone: Europe/Paris, calendar: XPAR, country: FR, sector: Industrials, provider_symbols: {yfinance: SU.PA}}
+  - {instrument_id: "equity:XETR:DTE", symbol: DTE, display_name: Deutsche Telekom, asset_class: equity, exchange_mic: XETR, currency: EUR, timezone: Europe/Berlin, calendar: XETR, country: DE, sector: Communication, provider_symbols: {yfinance: DTE.DE}}
+  - {instrument_id: "equity:XETR:ALV", symbol: ALV, display_name: Allianz, asset_class: equity, exchange_mic: XETR, currency: EUR, timezone: Europe/Berlin, calendar: XETR, country: DE, sector: Financials, provider_symbols: {yfinance: ALV.DE}}
+  - {instrument_id: "equity:XETR:MBG", symbol: MBG, display_name: Mercedes-Benz Group, asset_class: equity, exchange_mic: XETR, currency: EUR, timezone: Europe/Berlin, calendar: XETR, country: DE, sector: Automotive, provider_symbols: {yfinance: MBG.DE}}
+  - {instrument_id: "equity:XETR:BMW", symbol: BMW, display_name: BMW, asset_class: equity, exchange_mic: XETR, currency: EUR, timezone: Europe/Berlin, calendar: XETR, country: DE, sector: Automotive, provider_symbols: {yfinance: BMW.DE}}
+  - {instrument_id: "equity:XMAD:SAN", symbol: SAN, display_name: Banco Santander, asset_class: equity, exchange_mic: XMAD, currency: EUR, timezone: Europe/Madrid, calendar: XMAD, country: ES, sector: Financials, provider_symbols: {yfinance: SAN.MC}}
+  - {instrument_id: "equity:XMAD:IBE", symbol: IBE, display_name: Iberdrola, asset_class: equity, exchange_mic: XMAD, currency: EUR, timezone: Europe/Madrid, calendar: XMAD, country: ES, sector: Utilities, provider_symbols: {yfinance: IBE.MC}}
+  - {instrument_id: "equity:XMAD:ITX", symbol: ITX, display_name: Inditex, asset_class: equity, exchange_mic: XMAD, currency: EUR, timezone: Europe/Madrid, calendar: XMAD, country: ES, sector: Consumer, provider_symbols: {yfinance: ITX.MC}}
+  - {instrument_id: "equity:XMIL:ENI", symbol: ENI, display_name: Eni, asset_class: equity, exchange_mic: XMIL, currency: EUR, timezone: Europe/Rome, calendar: XMIL, country: IT, sector: Energy, provider_symbols: {yfinance: ENI.MI}}
+  - {instrument_id: "equity:XMIL:ISP", symbol: ISP, display_name: Intesa Sanpaolo, asset_class: equity, exchange_mic: XMIL, currency: EUR, timezone: Europe/Rome, calendar: XMIL, country: IT, sector: Financials, provider_symbols: {yfinance: ISP.MI}}
+  - {instrument_id: "equity:XMIL:ENEL", symbol: ENEL, display_name: Enel, asset_class: equity, exchange_mic: XMIL, currency: EUR, timezone: Europe/Rome, calendar: XMIL, country: IT, sector: Utilities, provider_symbols: {yfinance: ENEL.MI}}
+  - {instrument_id: "equity:XCSE:NOVO-B", symbol: NOVO-B, display_name: Novo Nordisk, asset_class: equity, exchange_mic: XCSE, currency: DKK, timezone: Europe/Copenhagen, calendar: XCSE, country: DK, sector: Healthcare, provider_symbols: {yfinance: NOVO-B.CO}}
+  - {instrument_id: "equity:XCSE:MAERSK-B", symbol: MAERSK-B, display_name: A.P. Moller-Maersk, asset_class: equity, exchange_mic: XCSE, currency: DKK, timezone: Europe/Copenhagen, calendar: XCSE, country: DK, sector: Industrials, provider_symbols: {yfinance: MAERSK-B.CO}}
+  - {instrument_id: "equity:XSTO:ERIC-B", symbol: ERIC-B, display_name: Ericsson, asset_class: equity, exchange_mic: XSTO, currency: SEK, timezone: Europe/Stockholm, calendar: XSTO, country: SE, sector: Technology, provider_symbols: {yfinance: ERIC-B.ST}}
+  - {instrument_id: "equity:XSTO:VOLV-B", symbol: VOLV-B, display_name: Volvo, asset_class: equity, exchange_mic: XSTO, currency: SEK, timezone: Europe/Stockholm, calendar: XSTO, country: SE, sector: Industrials, provider_symbols: {yfinance: VOLV-B.ST}}
+  - {instrument_id: "equity:XOSL:EQNR", symbol: EQNR, display_name: Equinor, asset_class: equity, exchange_mic: XOSL, currency: NOK, timezone: Europe/Oslo, calendar: XOSL, country: "NO", sector: Energy, provider_symbols: {yfinance: EQNR.OL}}

@@ -10,9 +10,10 @@ Gerçek emir göndermez, broker hesabına bağlanmaz, private exchange endpointi
 
 ## Öne çıkanlar
 
-- Kripto: CCXT üzerinden public spot OHLCV; varsayılan Binance, kimlik doğrulama yok.
-- Global hisseler: yfinance best-effort; günlük Stooq ve CSV/Parquet fallback.
-- BIST, ABD, Avrupa, Asya ve majör kripto için sürümlü YAML evrenleri.
+- Kripto: 20 likit parite için CCXT public spot OHLCV; Binance/Bitget, kimlik doğrulama yok.
+- Global hisseler: 120 sembol için yfinance; ABD günlük Stooq ve local CSV/Parquet fallback.
+- BIST30 ile 30'ar ABD, Avrupa ve Asya-Pasifik hissesi içeren sürümlü YAML evrenleri.
+- Küçük provider OHLC yuvarlama farklarını şeffaf biçimde onaran veri kalite katmanı.
 - Tek canonical bar ve feature sözleşmesi; TA-Lib runtime bağımlılığı yok.
 - CNN + GRU + Transformer uzmanları ve açıklanabilir softmax router.
 - Getiri, yön, volatilite ve belirsizlik için multi-task model.
